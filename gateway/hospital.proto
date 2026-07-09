@@ -1,0 +1,134 @@
+syntax = "proto3";
+package hospital;
+
+// ============ AUTHORIZATION SERVICE ============
+service AuthorizationService {
+  rpc CheckAccess (AccessRequest) returns (AccessResponse);
+}
+
+message AccessRequest {
+  string username = 1;
+  string role = 2;              // medico | estagiario | pesquisador
+  string query_type = 3;        // ResumoClinico | HistoricoClinico | ResumoCoorte | Estatisticas | ...
+  string patient_id = 4;        // used when role = medico/estagiario
+  string project_id = 5;        // used when role = pesquisador
+}
+
+message AccessResponse {
+  bool allow = 1;
+  string access_level = 2;      // FULL | PARTIAL | ANONYMIZED | AGGREGATED
+  string reason = 3;            // populated on deny
+}
+
+// ============ PATIENT DATA SERVICE ============
+service PatientDataService {
+  // Unary
+  rpc GetPatientsByCaregiver (CaregiverRequest) returns (PatientListResponse);
+  rpc GetPatientSummary (PatientRequest) returns (RawPatientDataResponse);
+  rpc GetPatientHistory (PatientRequest) returns (RawPatientDataResponse);
+  rpc GetAggregatedStats (CohortRequest) returns (AggregatedStatsResponse);
+
+  // Server streaming: stream cohort patients one at a time instead of
+  // buffering the whole cohort in memory (useful for large coortes).
+  rpc StreamCohortData (CohortRequest) returns (stream RawPatientDataResponse);
+}
+
+message CaregiverRequest {
+  string username = 1;
+  string role = 2;
+}
+
+message PatientListResponse {
+  repeated string patient_ids = 1;
+}
+
+message PatientRequest {
+  string patient_id = 1;
+}
+
+message RawPatientDataResponse {
+  string patient_id = 1;
+  string full_name = 2;
+  string birth_date = 3;
+  string gender = 4;
+  string city = 5;
+  string state = 6;
+  string cpf = 7;
+  string cns = 8;
+  repeated Encounter encounters = 9;
+  repeated ClinicalEvent conditions = 10;
+  repeated ClinicalEvent observations = 11;
+  repeated ClinicalEvent medications = 12;
+}
+
+message Encounter {
+  int32 encounter_id = 1;
+  string data_inicio = 2;
+  string data_fim = 3;
+  string tipo_atendimento = 4;
+  string setor = 5;
+}
+
+message ClinicalEvent {
+  int32 evento_id = 1;
+  string patient_id = 2;
+  string tipo_evento = 3;
+  string codigo_evento = 4;
+  string descricao = 5;
+  string data_evento = 6;
+  double valor = 7;
+  string unidade = 8;
+}
+
+message CohortRequest {
+  string project_id = 1;
+  string codigo_condicao = 2;
+}
+
+message RawCohortDataResponse {
+  repeated RawPatientDataResponse patients = 1;
+}
+
+message AggregatedStatsResponse {
+  int32 total_patients = 1;
+  map<string, double> gender_distribution = 2;   // e.g. "M": 0.30, "F": 0.70
+  map<string, double> age_distribution = 3;       // e.g. "18-39": 0.12
+  map<string, double> department_distribution = 4;
+  map<string, double> avg_values = 5;             // e.g. "HbA1c": 8.1
+}
+
+// ============ DATA TRANSFORM SERVICE ============
+service DataTransformService {
+  // Unary
+  rpc ToFHIRPatient (TransformRequest) returns (FHIRResource);
+  rpc ToFHIRBundle (TransformBundleRequest) returns (FHIRBundle);
+  rpc Aggregate (RawCohortDataResponse) returns (AggregatedStatsResponse);
+
+  // Client streaming: gateway streams raw patients (e.g. consumed from
+  // PatientDataService.StreamCohortData) and gets back one consolidated bundle.
+  rpc CollectFHIRBundle (stream TransformRequest) returns (FHIRBundle);
+
+  // Bidirectional streaming: pipeline mode used during load tests — raw
+  // patients go in, transformed FHIR resources for each patient come out
+  // without waiting for the whole cohort (keeps latency low under load).
+  rpc TransformPipeline (stream TransformRequest) returns (stream FHIRResource);
+}
+
+message TransformRequest {
+  RawPatientDataResponse patient = 1;
+  string access_level = 2;      // FULL | PARTIAL | ANONYMIZED | AGGREGATED
+}
+
+message TransformBundleRequest {
+  repeated RawPatientDataResponse patients = 1;
+  string access_level = 2;
+}
+
+message FHIRResource {
+  string resource_type = 1;
+  string json_payload = 2;      // serialized FHIR JSON
+}
+
+message FHIRBundle {
+  repeated FHIRResource entries = 1;
+}

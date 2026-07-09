@@ -1,0 +1,101 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: hospital
+      POSTGRES_USER: hospital
+      POSTGRES_PASSWORD: hospital
+    volumes:
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/1-schema.sql
+      - ./db/seed.sql:/docker-entrypoint-initdb.d/2-seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hospital"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./keycloak/hospital-realm.json:/opt/keycloak/data/import/hospital-realm.json
+
+  authorization-service:
+    build: ./services/authorization-service
+    environment:
+      DATABASE_URL: "host=postgres port=5432 dbname=hospital user=hospital password=hospital"
+      GRPC_PORT: "50051"
+      METRICS_PORT: "9100"
+    ports:
+      - "50051:50051"
+      - "9100:9100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  patient-data-service:
+    build: ./services/patient-data-service
+    environment:
+      DATABASE_URL: "host=postgres port=5432 dbname=hospital user=hospital password=hospital"
+      GRPC_PORT: "50052"
+      METRICS_PORT: "9101"
+    ports:
+      - "50052:50052"
+      - "9101:9101"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  data-transform-service:
+    build: ./services/data-transform-service
+    environment:
+      GRPC_PORT: "50053"
+      METRICS_PORT: "9102"
+    ports:
+      - "50053:50053"
+      - "9102:9102"
+
+  api-gateway:
+    build: ./gateway
+    environment:
+      PORT: "8080"
+      AUTH_MODE: "keycloak"
+      KEYCLOAK_ISSUER: "http://keycloak:8080/realms/hospital"
+      AUTHZ_ADDR: "authorization-service:50051"
+      PATIENT_DATA_ADDR: "patient-data-service:50052"
+      TRANSFORM_ADDR: "data-transform-service:50053"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - authorization-service
+      - patient-data-service
+      - data-transform-service
+      - keycloak
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8082:80"
+    depends_on:
+      - api-gateway
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus

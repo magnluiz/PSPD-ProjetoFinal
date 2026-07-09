@@ -1,0 +1,194 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: hospital
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: hospital
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: Hospital
+        orgId: 1
+        folder: Hospital
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /etc/grafana/provisioning/dashboards/hospital
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-hospital-dashboard
+  namespace: hospital
+data:
+  hospital-observability.json: |
+    {
+      "uid": "hospital-observability",
+      "title": "Hospital Microservices - Observability",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": { "from": "now-15m", "to": "now" },
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Gateway requests/s",
+          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum by (route, status) (rate(gateway_http_requests_total[1m]))",
+              "legendFormat": "{{route}} {{status}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Gateway p95 latency",
+          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, route) (rate(gateway_http_request_duration_seconds_bucket[5m])))",
+              "legendFormat": "{{route}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Authorization decisions",
+          "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum by (role, decision) (rate(authz_requests_total[1m]))",
+              "legendFormat": "{{role}} {{decision}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Database queries/s",
+          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "rate(patientdata_db_queries_total[1m])",
+              "legendFormat": "queries/s"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Deployment replicas",
+          "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "kube_deployment_status_replicas{namespace=\"hospital\"}",
+              "legendFormat": "{{deployment}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "HPA current replicas",
+          "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"hospital\"}",
+              "legendFormat": "{{horizontalpodautoscaler}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Node CPU usage",
+          "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))",
+              "legendFormat": "{{instance}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Node memory usage",
+          "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)",
+              "legendFormat": "{{instance}}"
+            }
+          ]
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: hospital
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: grafana }
+  template:
+    metadata:
+      labels: { app: grafana }
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.1.0
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: "admin"
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: "Viewer"
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /etc/grafana/provisioning/dashboards/hospital
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+      volumes:
+        - name: datasources
+          configMap: { name: grafana-datasources }
+        - name: dashboard-provider
+          configMap: { name: grafana-dashboard-provider }
+        - name: dashboards
+          configMap: { name: grafana-hospital-dashboard }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: hospital
+spec:
+  type: NodePort
+  selector: { app: grafana }
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 30030

@@ -1,0 +1,12 @@
+node_modules/
+.venv/
+.agents/
+.codex/
+.git-local/
+__pycache__/
+*.pyc
+.env
+db/seed.sql
+load-tests/*/results/
+*.log
+.DS_Store

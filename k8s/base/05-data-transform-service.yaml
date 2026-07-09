@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-transform-service
+  namespace: hospital
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: data-transform-service }
+  template:
+    metadata:
+      labels: { app: data-transform-service }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9102"
+    spec:
+      containers:
+        - name: data-transform-service
+          image: hospital/data-transform-service:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GRPC_PORT
+              value: "50053"
+            - name: METRICS_PORT
+              value: "9102"
+          ports:
+            - containerPort: 50053
+            - containerPort: 9102
+          resources:
+            requests: { cpu: "150m", memory: "128Mi" }
+            limits: { cpu: "750m", memory: "384Mi" }
+          readinessProbe:
+            tcpSocket: { port: 50053 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 50053 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: data-transform-service
+  namespace: hospital
+spec:
+  selector: { app: data-transform-service }
+  ports:
+    - name: grpc
+      port: 50053
+      targetPort: 50053
+    - name: metrics
+      port: 9102
+      targetPort: 9102

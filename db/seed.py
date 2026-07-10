@@ -6,7 +6,7 @@ Usage:
 
 Generates deterministic (seeded) synthetic data:
   - 5 médicos, 5 estagiários (each supervised by one médico)
-  - 3 pesquisadores, each with 1-2 projects (Diabetes / Hipertensao / Obesidade)
+  - 3 pesquisadores, with stable approved/suspended projects for repeatable tests
   - N patients, each assigned to a médico (and ~60% also to an estagiário)
   - 1-4 encounters per patient
   - 2-6 clinical_events per patient (mix of Condicao/Observacao/Medicacao),
@@ -179,7 +179,10 @@ def gen_clinical_events(patients):
 def gen_assignments(patients):
     rows = []
     for p in patients:
-        medico = random.choice(MEDICOS)
+        if p["patient_id"] == "P000001":
+            medico = "med.cardoso"
+        else:
+            medico = random.choice(MEDICOS)
         rows.append(
             {
                 "username_cuidador": medico,
@@ -189,8 +192,13 @@ def gen_assignments(patients):
                 "status": "ativo",
             }
         )
-        if random.random() < 0.6:
+        if p["patient_id"] == "P000010":
+            estagiario = "est.silva"
+        elif random.random() < 0.6:
             estagiario = random.choice(ESTAGIARIOS)
+        else:
+            estagiario = None
+        if estagiario:
             rows.append(
                 {
                     "username_cuidador": estagiario,
@@ -204,9 +212,31 @@ def gen_assignments(patients):
 
 
 def gen_projects():
-    rows = []
+    rows = [
+        {
+            "titulo": "Estudo sobre Depressao - pesq.franca",
+            "username_pesquisador": "pesq.franca",
+            "codigo_condicao": "Depressao",
+            "status": "Aprovado",
+            "data_validade": date.today() + timedelta(days=255),
+        },
+        {
+            "titulo": "Estudo sobre Hipertensao - pesq.franca",
+            "username_pesquisador": "pesq.franca",
+            "codigo_condicao": "Hipertensao",
+            "status": "Aprovado",
+            "data_validade": date.today() + timedelta(days=160),
+        },
+        {
+            "titulo": "Estudo sobre Hipertensao - pesq.dias",
+            "username_pesquisador": "pesq.dias",
+            "codigo_condicao": "Hipertensao",
+            "status": "Suspenso",
+            "data_validade": date.today() + timedelta(days=345),
+        },
+    ]
     for pesq in PESQUISADORES:
-        for _ in range(random.randint(1, 2)):
+        for _ in range(1):
             rows.append(
                 {
                     "titulo": f"Estudo sobre {random.choice(CONDICOES)} - {pesq}",

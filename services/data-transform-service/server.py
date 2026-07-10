@@ -113,6 +113,25 @@ def to_fhir_patient(patient, access_level: str) -> dict:
         resource["address"] = [
             {"city": redacted.get("city", ""), "state": redacted.get("state", "")}
         ]
+    identifiers = []
+    if redacted.get("cpf"):
+        identifiers.append(
+            {
+                "system": "urn:oid:2.16.76.1.3.1",
+                "type": {"text": "CPF"},
+                "value": redacted["cpf"],
+            }
+        )
+    if redacted.get("cns"):
+        identifiers.append(
+            {
+                "system": "urn:oid:2.16.76.1.3.2",
+                "type": {"text": "CNS"},
+                "value": redacted["cns"],
+            }
+        )
+    if identifiers:
+        resource["identifier"] = identifiers
     if "age_bracket" in redacted:
         resource["extension"] = [
             {"url": "age-bracket", "valueString": redacted["age_bracket"]}

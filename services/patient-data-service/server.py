@@ -9,9 +9,10 @@ import logging
 import os
 import time
 from concurrent import futures
+from contextlib import contextmanager
 
 import grpc
-import psycopg2
+from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 from prometheus_client import Counter, Histogram, start_http_server
 
@@ -25,6 +26,9 @@ DB_DSN = os.environ.get(
     "DATABASE_URL",
     "host=localhost port=5432 dbname=hospital user=hospital password=hospital",
 )
+DB_POOL_MIN = int(os.environ.get("DB_POOL_MIN", "1"))
+DB_POOL_MAX = int(os.environ.get("DB_POOL_MAX", "30"))
+DB_POOL = None
 
 REQUEST_COUNT = Counter(
     "patientdata_requests_total", "Total requests handled", ["method"]
@@ -35,8 +39,23 @@ REQUEST_LATENCY = Histogram(
 DB_QUERY_COUNT = Counter("patientdata_db_queries_total", "Total SQL queries executed")
 
 
+def _get_pool():
+    global DB_POOL
+    if DB_POOL is None:
+        DB_POOL = pool.ThreadedConnectionPool(DB_POOL_MIN, DB_POOL_MAX, DB_DSN)
+    return DB_POOL
+
+
+@contextmanager
 def get_conn():
-    return psycopg2.connect(DB_DSN)
+    conn = _get_pool().getconn()
+    try:
+        yield conn
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        _get_pool().putconn(conn)
 
 
 def _row_to_encounter(r):

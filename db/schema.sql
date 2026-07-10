@@ -57,3 +57,8 @@ CREATE INDEX IF NOT EXISTS idx_events_codigo ON clinical_events(codigo_evento);
 CREATE INDEX IF NOT EXISTS idx_upa_cuidador ON user_patient_assignments(username_cuidador);
 CREATE INDEX IF NOT EXISTS idx_upa_patient ON user_patient_assignments(patient_id);
 CREATE INDEX IF NOT EXISTS idx_projects_pesquisador ON projects(username_pesquisador);
+CREATE INDEX IF NOT EXISTS idx_encounters_patient_inicio ON encounters(patient_id, data_inicio DESC);
+CREATE INDEX IF NOT EXISTS idx_events_patient_data ON clinical_events(patient_id, data_evento DESC);
+CREATE INDEX IF NOT EXISTS idx_events_cohort ON clinical_events(codigo_evento, tipo_evento, patient_id);
+CREATE INDEX IF NOT EXISTS idx_upa_access ON user_patient_assignments(username_cuidador, patient_id, tipo_vinculo, status);
+CREATE INDEX IF NOT EXISTS idx_projects_access ON projects(projeto_id, username_pesquisador, status, data_validade);

@@ -27,6 +27,7 @@ const DURATION = __ENV.DURATION || "60s";
 
 const errorCount = new Counter("app_errors");
 const denyCount = new Counter("app_denies");
+const unexpectedStatusCount = new Counter("unexpected_statuses");
 const summaryTrend = new Trend("resumo_clinico_duration");
 const statsTrend = new Trend("estatisticas_duration");
 
@@ -104,7 +105,10 @@ export default function (data) {
     });
     summaryTrend.add(res.timings.duration);
     if (res.status === 403) denyCount.add(1);
-    else if (res.status !== 200) errorCount.add(1);
+    else if (res.status !== 200) {
+      errorCount.add(1);
+      unexpectedStatusCount.add(1, { endpoint: "resumo-medico", status: String(res.status) });
+    }
     check(res, { "status is 200 or 403": (r) => r.status === 200 || r.status === 403 });
   } else if (scenario < 0.8) {
     // estagiário querying resumo clínico
@@ -115,7 +119,10 @@ export default function (data) {
     });
     summaryTrend.add(res.timings.duration);
     if (res.status === 403) denyCount.add(1);
-    else if (res.status !== 200) errorCount.add(1);
+    else if (res.status !== 200) {
+      errorCount.add(1);
+      unexpectedStatusCount.add(1, { endpoint: "resumo-estagiario", status: String(res.status) });
+    }
     check(res, { "status is 200 or 403": (r) => r.status === 200 || r.status === 403 });
   } else {
     // pesquisador querying aggregated stats
@@ -126,7 +133,10 @@ export default function (data) {
     });
     statsTrend.add(res.timings.duration);
     if (res.status === 403) denyCount.add(1);
-    else if (res.status !== 200) errorCount.add(1);
+    else if (res.status !== 200) {
+      errorCount.add(1);
+      unexpectedStatusCount.add(1, { endpoint: "estatisticas", status: String(res.status) });
+    }
     check(res, { "status is 200 or 403": (r) => r.status === 200 || r.status === 403 });
   }
 

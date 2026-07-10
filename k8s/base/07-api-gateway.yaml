@@ -4,7 +4,7 @@ metadata:
   name: api-gateway
   namespace: hospital
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels: { app: api-gateway }
   template:

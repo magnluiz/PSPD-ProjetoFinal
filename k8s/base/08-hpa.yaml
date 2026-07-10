@@ -1,5 +1,6 @@
 # Requires the metrics-server addon (e.g. `minikube addons enable metrics-server`)
-# HPA scales on CPU utilization, min 1 / max 10 replicas, per the spec (item 3.d).
+# HPA scales on CPU utilization. Critical API path services keep a small warm
+# baseline so short load-test stages do not start with a single saturated pod.
 
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -11,7 +12,7 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: api-gateway
-  minReplicas: 1
+  minReplicas: 3
   maxReplicas: 10
   metrics:
     - type: Resource
@@ -36,7 +37,7 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: authorization-service
-  minReplicas: 1
+  minReplicas: 3
   maxReplicas: 10
   metrics:
     - type: Resource
@@ -56,7 +57,7 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: patient-data-service
-  minReplicas: 1
+  minReplicas: 3
   maxReplicas: 10
   metrics:
     - type: Resource

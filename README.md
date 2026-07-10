@@ -56,6 +56,7 @@ Réplica única de cada serviço + 1 instância do Postgres, conforme item 3.a
 da especificação.
 
 ```bash
+python3 -m pip install -r db/requirements.txt
 python3 db/seed.py --patients 500 --out db/seed.sql
 docker compose up --build
 ```
@@ -83,7 +84,7 @@ diretamente (já usado pelos scripts de carga).
 ### Testando os 4 níveis de acesso
 
 Pelo frontend, acesse http://localhost:8082, clique em "Login Keycloak" e
-use um dos usuários do realm (`med.cardoso`, `est.silva`, `pesq.dias`, todos
+use um dos usuários do realm (`med.cardoso`, `est.silva`, `pesq.franca`, todos
 com senha `senha123`). O frontend usa Authorization Code + PKCE e envia o JWT
 ao gateway como Bearer token.
 
@@ -94,16 +95,20 @@ curl -H "x-username: med.cardoso" -H "x-role: medico" \
 
 # PARTIAL (estagiário)
 curl -H "x-username: est.silva" -H "x-role: estagiario" \
-  http://localhost:8080/api/patients/P000004/resumo-clinico
+  http://localhost:8080/api/patients/P000010/resumo-clinico
 
 # AGGREGATED (pesquisador, projeto aprovado e vigente)
-curl -H "x-username: pesq.dias" -H "x-role: pesquisador" \
+curl -H "x-username: pesq.franca" -H "x-role: pesquisador" \
   http://localhost:8080/api/coorte/1/estatisticas
 
 # ANONYMIZED (pesquisador, coorte via streaming)
-curl -H "x-username: pesq.dias" -H "x-role: pesquisador" \
+curl -H "x-username: pesq.franca" -H "x-role: pesquisador" \
   http://localhost:8080/api/coorte/1/exames
 ```
+
+Os comandos acima usam headers de desenvolvimento. Para executá-los no
+`docker compose` padrão, inicie o gateway com `AUTH_MODE=insecure-dev`; caso
+contrário, use o token Bearer real obtido no passo anterior.
 
 ## 2. Cluster Kubernetes (minikube, 1 master + 3+ workers)
 
@@ -169,6 +174,7 @@ kubectl -n hospital port-forward svc/keycloak 8081:8080
 **Locust (alternativa/complementar):**
 ```bash
 cd load-tests/locust
+python3 -m pip install -r requirements.txt
 locust -f locustfile.py --host $(minikube service api-gateway -n hospital --url) \
   --users 100 --spawn-rate 20 --run-time 60s --headless --csv results/locust-100users
 ```
@@ -192,13 +198,12 @@ Métricas expostas (mínimo de 5 exigido pela especificação):
 5. `transform_requests_total{method,access_level}` — uso por tipo de transformação
 6. `gateway_authz_denials_total` / `gateway_grpc_errors_total` — erros
 7. Métricas padrão de processo (CPU, memória) via `prom-client`/`prometheus_client`
-8. `kube_pod_*` (via metrics-server/HPA) — quantidade de pods, uso de CPU/memória por pod
+8. `kube_deployment_status_replicas` e `kube_horizontalpodautoscaler_*` — réplicas e HPA via kube-state-metrics
+9. `node_cpu_seconds_total` e `node_memory_*` — CPU/memória dos nós via node-exporter
 
 Dashboards Grafana: crie painéis apontando para o datasource "Prometheus"
-(já provisionado). Sugestão de painéis: requests/s por rota, p95 de
-latência, taxa de erro, decisões de autorização por papel, réplicas ativas
-por Deployment (via `kube_deployment_status_replicas`, se o
-kube-state-metrics for adicionado).
+(já provisionado). O dashboard `Hospital Microservices - Observability`
+também é provisionado em `k8s/monitoring/01-grafana.yaml`.
 
 ## Requisitos e testes já validados neste projeto
 

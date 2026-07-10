@@ -1,21 +1,18 @@
 #!/bin/bash
-# Builds all Docker images inside minikube's Docker daemon and applies the
-# K8s manifests. Run this after `minikube start --nodes 4 ...` (1 master +
-# 3 workers, per the assignment).
+# Builds all Docker images for minikube and applies the K8s manifests. Run
+# this after `minikube start --nodes 4 ...` (1 master + 3 workers, per the
+# assignment).
 #
 # Usage: ./deploy.sh
 
 set -e
 
-echo "=== Pointing Docker CLI at minikube's daemon ==="
-eval $(minikube docker-env)
-
 echo "=== Building images ==="
-docker build -t hospital/authorization-service:latest ./services/authorization-service
-docker build -t hospital/patient-data-service:latest ./services/patient-data-service
-docker build -t hospital/data-transform-service:latest ./services/data-transform-service
-docker build -t hospital/api-gateway:latest ./gateway
-docker build -t hospital/frontend:latest ./frontend
+minikube image build --all -t hospital/authorization-service:latest ./services/authorization-service
+minikube image build --all -t hospital/patient-data-service:latest ./services/patient-data-service
+minikube image build --all -t hospital/data-transform-service:latest ./services/data-transform-service
+minikube image build --all -t hospital/api-gateway:latest ./gateway
+minikube image build --all -t hospital/frontend:latest ./frontend
 
 echo "=== Generating seed data ==="
 python3 db/seed.py --patients 500 --out db/seed.sql
@@ -23,12 +20,12 @@ python3 db/seed.py --patients 500 --out db/seed.sql
 echo "=== Applying namespace, secrets, and Keycloak realm/DB init ConfigMaps ==="
 kubectl apply -f k8s/base/00-namespace.yaml
 kubectl apply -f k8s/base/01-secrets.yaml
-kubectl create configmap postgres-init-scripts \
-  --from-file=db/schema.sql --from-file=db/seed.sql \
-  -n hospital --dry-run=client -o yaml | kubectl apply -f -
-kubectl create configmap keycloak-realm \
-  --from-file=keycloak/hospital-realm.json \
-  -n hospital --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n hospital delete configmap postgres-init-scripts --ignore-not-found
+kubectl -n hospital create configmap postgres-init-scripts \
+  --from-file=db/schema.sql --from-file=db/seed.sql
+kubectl -n hospital delete configmap keycloak-realm --ignore-not-found
+kubectl -n hospital create configmap keycloak-realm \
+  --from-file=keycloak/hospital-realm.json
 
 echo "=== Applying core services ==="
 kubectl apply -f k8s/base/

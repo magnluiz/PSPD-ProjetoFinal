@@ -10,3 +10,5 @@ db/seed.sql
 load-tests/*/results/
 *.log
 .DS_Store
+kubeconfig-grupo-6.yaml
+deploy.sh

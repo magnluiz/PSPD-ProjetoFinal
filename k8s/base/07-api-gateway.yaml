@@ -17,8 +17,8 @@ spec:
     spec:
       containers:
         - name: api-gateway
-          image: hospital/api-gateway:latest
-          imagePullPolicy: IfNotPresent
+          image: coimbrasdan/hospital-api-gateway:g6
+          imagePullPolicy: Always
           env:
             - name: PORT
               value: "8080"

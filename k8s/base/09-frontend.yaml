@@ -13,8 +13,8 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: hospital/frontend:latest
-          imagePullPolicy: IfNotPresent
+          image: coimbrasdan/hospital-frontend:g6
+          imagePullPolicy: Always
           ports:
             - containerPort: 80
           resources:

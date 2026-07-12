@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: authorization-service
-          image: hospital/authorization-service:latest
+          image: coimbrasdan/hospital-authorization-service:g6
           imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef: { name: postgres-credentials }

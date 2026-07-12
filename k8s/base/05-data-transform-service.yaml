@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: data-transform-service
-          image: hospital/data-transform-service:latest
+          image: coimbrasdan/hospital-data-transform-service:g6
           imagePullPolicy: IfNotPresent
           env:
             - name: GRPC_PORT

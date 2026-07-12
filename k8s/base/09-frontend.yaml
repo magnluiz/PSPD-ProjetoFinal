@@ -13,7 +13,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: hospital/frontend:latest
+          image: coimbrasdan/hospital-frontend:g6
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
@@ -35,9 +35,7 @@ metadata:
   name: frontend
   namespace: grupo-6
 spec:
-  type: NodePort
   selector: { app: frontend }
   ports:
     - port: 80
       targetPort: 80
-      nodePort: 30082

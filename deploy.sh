@@ -18,7 +18,7 @@ echo "=== Generating seed data ==="
 python3 db/seed.py --patients 500 --out db/seed.sql
 
 echo "=== Applying namespace, secrets, and Keycloak realm/DB init ConfigMaps ==="
-kubectl apply -f k8s/base/00-namespace.yaml
+kubectl apply -f k8s/local/00-namespace.yaml
 kubectl apply -f k8s/base/01-secrets.yaml
 kubectl -n hospital delete configmap postgres-init-scripts --ignore-not-found
 kubectl -n hospital create configmap postgres-init-scripts \
@@ -28,6 +28,8 @@ kubectl -n hospital create configmap keycloak-realm \
   --from-file=keycloak/hospital-realm.json
 
 echo "=== Applying core services ==="
+kubectl apply -f k8s/local/02-postgres.yaml
+kubectl apply -f k8s/local/06-keycloak.yaml
 kubectl apply -f k8s/base/
 
 echo "=== Applying monitoring stack ==="

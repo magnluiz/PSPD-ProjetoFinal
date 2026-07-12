@@ -40,25 +40,27 @@ def get_conn():
 
 
 def _row_to_encounter(r):
+    # Proto field names (data_inicio, tipo_atendimento, setor, ...) are kept
+    # as-is -- they are the internal gRPC contract, not DB column names.
     return hospital_pb2.Encounter(
         encounter_id=r["encounter_id"],
-        data_inicio=str(r["data_inicio"]),
-        data_fim=str(r["data_fim"]) if r["data_fim"] else "",
-        tipo_atendimento=r["tipo_atendimento"] or "",
-        setor=r["setor"] or "",
+        data_inicio=str(r["start_date"]),
+        data_fim=str(r["end_date"]) if r["end_date"] else "",
+        tipo_atendimento=r["encounter_type"] or "",
+        setor=r["department"] or "",
     )
 
 
 def _row_to_event(r):
     return hospital_pb2.ClinicalEvent(
-        evento_id=r["evento_id"],
+        evento_id=r["event_id"],
         patient_id=r["patient_id"],
-        tipo_evento=r["tipo_evento"],
-        codigo_evento=r["codigo_evento"],
-        descricao=r["descricao"] or "",
-        data_evento=str(r["data_evento"]),
-        valor=float(r["valor"]) if r["valor"] is not None else 0.0,
-        unidade=r["unidade"] or "",
+        tipo_evento=r["event_type"],
+        codigo_evento=r["code"],
+        descricao=r["description"] or "",
+        data_evento=str(r["event_date"]),
+        valor=float(r["value"]) if r["value"] is not None else 0.0,
+        unidade=r["unit"] or "",
     )
 
 
@@ -71,20 +73,20 @@ def _build_patient(cur, patient_id) -> hospital_pb2.RawPatientDataResponse:
 
     DB_QUERY_COUNT.inc()
     cur.execute(
-        "SELECT * FROM encounters WHERE patient_id = %s ORDER BY data_inicio DESC",
+        "SELECT * FROM encounters WHERE patient_id = %s ORDER BY start_date DESC",
         (patient_id,),
     )
     encounters = [_row_to_encounter(r) for r in cur.fetchall()]
 
     DB_QUERY_COUNT.inc()
     cur.execute(
-        "SELECT * FROM clinical_events WHERE patient_id = %s ORDER BY data_evento DESC",
+        "SELECT * FROM clinical_events WHERE patient_id = %s ORDER BY event_date DESC",
         (patient_id,),
     )
     events = cur.fetchall()
-    conditions = [_row_to_event(r) for r in events if r["tipo_evento"] == "Condicao"]
-    observations = [_row_to_event(r) for r in events if r["tipo_evento"] == "Observacao"]
-    medications = [_row_to_event(r) for r in events if r["tipo_evento"] == "Medicacao"]
+    conditions = [_row_to_event(r) for r in events if r["event_type"] == "CONDITION"]
+    observations = [_row_to_event(r) for r in events if r["event_type"] == "OBSERVATION"]
+    medications = [_row_to_event(r) for r in events if r["event_type"] == "MEDICATION"]
 
     return hospital_pb2.RawPatientDataResponse(
         patient_id=p["patient_id"],
@@ -106,13 +108,13 @@ class PatientDataServicer(hospital_pb2_grpc.PatientDataServiceServicer):
     def GetPatientsByCaregiver(self, request, context):
         with REQUEST_LATENCY.labels("GetPatientsByCaregiver").time():
             REQUEST_COUNT.labels("GetPatientsByCaregiver").inc()
-            tipo = "medico" if request.role.lower() == "medico" else "estagiario"
+            tipo = "ATTENDING" if request.role.lower() == "medico" else "TRAINEE"
             with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
                 DB_QUERY_COUNT.inc()
                 cur.execute(
                     """
                     SELECT patient_id FROM user_patient_assignments
-                    WHERE username_cuidador = %s AND tipo_vinculo = %s AND status = 'ativo'
+                    WHERE username = %s AND assignment_type = %s AND active = true
                     """,
                     (request.username, tipo),
                 )
@@ -169,23 +171,23 @@ class PatientDataServicer(hospital_pb2_grpc.PatientDataServiceServicer):
                 DB_QUERY_COUNT.inc()
                 cur.execute(
                     """
-                    SELECT setor FROM encounters WHERE patient_id = ANY(%s)
+                    SELECT department FROM encounters WHERE patient_id = ANY(%s)
                     """,
                     (patient_ids,),
                 )
-                depts = [r["setor"] for r in cur.fetchall() if r["setor"]]
+                depts = [r["department"] for r in cur.fetchall() if r["department"]]
                 dept_dist = _distribution(depts)
 
                 DB_QUERY_COUNT.inc()
                 cur.execute(
                     """
-                    SELECT codigo_evento, AVG(valor) AS media FROM clinical_events
-                    WHERE patient_id = ANY(%s) AND tipo_evento = 'Observacao' AND valor IS NOT NULL
-                    GROUP BY codigo_evento
+                    SELECT code, AVG(value) AS media FROM clinical_events
+                    WHERE patient_id = ANY(%s) AND event_type = 'OBSERVATION' AND value IS NOT NULL
+                    GROUP BY code
                     """,
                     (patient_ids,),
                 )
-                avg_values = {r["codigo_evento"]: float(r["media"]) for r in cur.fetchall()}
+                avg_values = {r["code"]: float(r["media"]) for r in cur.fetchall()}
 
             return hospital_pb2.AggregatedStatsResponse(
                 total_patients=len(patient_ids),
@@ -215,8 +217,8 @@ class PatientDataServicer(hospital_pb2_grpc.PatientDataServiceServicer):
             """
             SELECT DISTINCT ce.patient_id
             FROM clinical_events ce
-            JOIN projects p ON p.codigo_condicao = ce.codigo_evento
-            WHERE p.projeto_id = %s AND ce.tipo_evento = 'Condicao'
+            JOIN projects p ON p.target_condition_code = ce.code
+            WHERE p.project_id = %s AND ce.event_type = 'CONDITION'
             """,
             (request.project_id,),
         )

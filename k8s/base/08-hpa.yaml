@@ -5,7 +5,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: api-gateway-hpa
-  namespace: hospital
+  namespace: grupo-6
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -30,7 +30,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: authorization-service-hpa
-  namespace: hospital
+  namespace: grupo-6
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -50,7 +50,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: patient-data-service-hpa
-  namespace: hospital
+  namespace: grupo-6
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -70,7 +70,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: data-transform-service-hpa
-  namespace: hospital
+  namespace: grupo-6
 spec:
   scaleTargetRef:
     apiVersion: apps/v1

@@ -59,15 +59,15 @@ class AuthorizationServicer(hospital_pb2_grpc.AuthorizationServiceServicer):
             return decision
 
     def _check_medico(self, request):
-        """Médico só pode acessar pacientes vinculados a ele."""
+        """Médico só pode acessar pacientes vinculados a ele (assignment_type = ATTENDING)."""
         if not request.patient_id:
             return hospital_pb2.AccessResponse(allow=False, reason="patient_id required")
         with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
                 SELECT 1 FROM user_patient_assignments
-                WHERE username_cuidador = %s AND patient_id = %s
-                  AND tipo_vinculo = 'medico' AND status = 'ativo'
+                WHERE username = %s AND patient_id = %s
+                  AND assignment_type = 'ATTENDING' AND active = true
                 """,
                 (request.username, request.patient_id),
             )
@@ -78,16 +78,17 @@ class AuthorizationServicer(hospital_pb2_grpc.AuthorizationServiceServicer):
         )
 
     def _check_estagiario(self, request):
-        """Estagiário só pode acessar pacientes de uma atividade supervisionada ativa."""
+        """Estagiário só pode acessar pacientes de uma atividade supervisionada ativa
+        (assignment_type = TRAINEE, com supervisor_username preenchido)."""
         if not request.patient_id:
             return hospital_pb2.AccessResponse(allow=False, reason="patient_id required")
         with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
                 SELECT 1 FROM user_patient_assignments
-                WHERE username_cuidador = %s AND patient_id = %s
-                  AND tipo_vinculo = 'estagiario' AND status = 'ativo'
-                  AND username_supervisor IS NOT NULL
+                WHERE username = %s AND patient_id = %s
+                  AND assignment_type = 'TRAINEE' AND active = true
+                  AND supervisor_username IS NOT NULL
                 """,
                 (request.username, request.patient_id),
             )
@@ -98,27 +99,28 @@ class AuthorizationServicer(hospital_pb2_grpc.AuthorizationServiceServicer):
         )
 
     def _check_pesquisador(self, request):
-        """Pesquisador só pode acessar coortes de projetos aprovados e vigentes."""
+        """Pesquisador só pode acessar coortes de projetos aprovados e vigentes
+        (status = APPROVED em projects)."""
         if not request.project_id:
             return hospital_pb2.AccessResponse(allow=False, reason="project_id required")
         with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT status, data_validade FROM projects
-                WHERE projeto_id = %s AND username_pesquisador = %s
+                SELECT status, valid_until FROM projects
+                WHERE project_id = %s AND researcher_username = %s
                 """,
                 (request.project_id, request.username),
             )
             row = cur.fetchone()
             if not row:
                 return hospital_pb2.AccessResponse(allow=False, reason="projeto não encontrado")
-            if row["status"] != "Aprovado":
+            if row["status"] != "APPROVED":
                 return hospital_pb2.AccessResponse(
                     allow=False, reason=f"projeto com status '{row['status']}'"
                 )
             import datetime
 
-            if row["data_validade"] and row["data_validade"] < datetime.date.today():
+            if row["valid_until"] and row["valid_until"] < datetime.date.today():
                 return hospital_pb2.AccessResponse(allow=False, reason="projeto expirado")
 
             level = (

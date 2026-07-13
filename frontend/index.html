@@ -16,6 +16,7 @@
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .status { margin-top: 10px; color: #555; font-size: 0.9rem; }
+  .hint { color: #666; font-size: 0.8rem; margin-top: 8px; }
   .FULL { background: #d1fae5; color: #065f46; }
   .PARTIAL { background: #fef3c7; color: #92400e; }
   .ANONYMIZED { background: #dbeafe; color: #1e40af; }
@@ -39,9 +40,26 @@
         <input id="keycloakUrl" value="https://kiriland.unb.br/keycloak" />
       </div>
     </div>
+    <div class="row">
+      <div>
+        <label>Usuário de teste</label>
+        <input id="username" value="med.cardoso" />
+      </div>
+      <div>
+        <label>Senha de teste</label>
+        <input id="password" type="password" value="PseudoPEP2026!" />
+      </div>
+    </div>
+    <label>Client ID</label>
+    <input id="clientId" value="admin-cli" />
     <div class="actions">
-      <button id="loginBtn" onclick="login()">Login Keycloak</button>
+      <button id="loginBtn" onclick="loginPasswordGrant()">Login de teste</button>
+      <button id="oidcLoginBtn" onclick="login()">Login OIDC/PKCE</button>
       <button id="logoutBtn" onclick="logout()" disabled>Sair</button>
+    </div>
+    <div class="hint">
+      No cluster do professor, o client confirmado para testes é <code>admin-cli</code>.
+      O login OIDC/PKCE depende de um client público configurado no Keycloak.
     </div>
     <div id="authStatus" class="status">Não autenticado</div>
   </fieldset>
@@ -49,7 +67,7 @@
   <fieldset id="patientFields">
     <legend>Consulta por paciente (médico/estagiário)</legend>
     <label>Patient ID</label>
-    <input id="patientId" value="P000001" />
+    <input id="patientId" value="P060115987" />
     <button onclick="consultaResumo()">Resumo Clínico</button>
     <button onclick="consultaHistorico()">Histórico Clínico</button>
   </fieldset>
@@ -57,7 +75,7 @@
   <fieldset id="researchFields">
     <legend>Consulta de coorte (pesquisador)</legend>
     <label>Project ID</label>
-    <input id="projectId" value="1" />
+    <input id="projectId" value="PRJ01" />
     <button onclick="consultaEstatisticas()">Estatísticas Agregadas</button>
     <button onclick="consultaExames()">Exames da Coorte (anonimizado)</button>
   </fieldset>
@@ -67,7 +85,6 @@
   <pre id="result">—</pre>
 
 <script>
-const CLIENT_ID = "hospital-frontend";
 const REALM = "grupo06";
 let auth = loadAuth();
 
@@ -79,12 +96,16 @@ function loadConfig() {
   const config = JSON.parse(sessionStorage.getItem("hospital_frontend_config") || "{}");
   if (config.gatewayUrl) document.getElementById("gatewayUrl").value = config.gatewayUrl;
   if (config.keycloakUrl) document.getElementById("keycloakUrl").value = config.keycloakUrl;
+  if (config.clientId) document.getElementById("clientId").value = config.clientId;
+  if (config.username) document.getElementById("username").value = config.username;
 }
 
 function saveConfig() {
   sessionStorage.setItem("hospital_frontend_config", JSON.stringify({
     gatewayUrl: gw(),
     keycloakUrl: kc(),
+    clientId: clientId(),
+    username: document.getElementById("username").value,
   }));
 }
 
@@ -123,6 +144,38 @@ function parseJwt(token) {
   return JSON.parse(decodeURIComponent(escape(atob(payload))));
 }
 
+function clientId() {
+  return document.getElementById("clientId").value.trim();
+}
+
+async function loginPasswordGrant() {
+  saveConfig();
+  const body = new URLSearchParams();
+  body.set("grant_type", "password");
+  body.set("client_id", clientId());
+  body.set("username", document.getElementById("username").value.trim());
+  body.set("password", document.getElementById("password").value);
+
+  const res = await fetch(`${kc()}/realms/${REALM}/protocol/openid-connect/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`Falha no login de teste: HTTP ${res.status} - ${detail}`);
+  }
+
+  const token = await res.json();
+  const claims = parseJwt(token.access_token);
+  saveAuth({
+    accessToken: token.access_token,
+    refreshToken: token.refresh_token,
+    username: claims.preferred_username || document.getElementById("username").value.trim() || claims.sub,
+    roles: claims.realm_access?.roles || [],
+  });
+}
+
 async function login() {
   saveConfig();
   const verifier = randomString();
@@ -132,7 +185,7 @@ async function login() {
 
   const challenge = base64Url(await sha256(verifier));
   const url = new URL(`${kc()}/realms/${REALM}/protocol/openid-connect/auth`);
-  url.searchParams.set("client_id", CLIENT_ID);
+  url.searchParams.set("client_id", clientId());
   url.searchParams.set("redirect_uri", redirectUri());
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", "openid profile");
@@ -154,7 +207,7 @@ async function finishLoginIfNeeded() {
 
   const body = new URLSearchParams();
   body.set("grant_type", "authorization_code");
-  body.set("client_id", CLIENT_ID);
+  body.set("client_id", clientId());
   body.set("redirect_uri", redirectUri());
   body.set("code", code);
   body.set("code_verifier", sessionStorage.getItem("pkce_verifier"));
@@ -181,13 +234,16 @@ function logout() {
   const keycloakUrl = kc();
   saveAuth(null);
   const url = new URL(`${keycloakUrl}/realms/${REALM}/protocol/openid-connect/logout`);
-  url.searchParams.set("client_id", CLIENT_ID);
+  url.searchParams.set("client_id", clientId());
   url.searchParams.set("post_logout_redirect_uri", redirectUri());
   location.href = url.toString();
 }
 
 function headers() {
-  return auth ? { "Authorization": `Bearer ${auth.accessToken}` } : {};
+  return auth ? {
+    "Authorization": `Bearer ${auth.accessToken}`,
+    "X-Username": auth.username,
+  } : {};
 }
 
 async function call(path) {
@@ -240,6 +296,8 @@ function renderAuth() {
 loadConfig();
 document.getElementById("gatewayUrl").addEventListener("change", saveConfig);
 document.getElementById("keycloakUrl").addEventListener("change", saveConfig);
+document.getElementById("clientId").addEventListener("change", saveConfig);
+document.getElementById("username").addEventListener("change", saveConfig);
 
 finishLoginIfNeeded()
   .catch((err) => {

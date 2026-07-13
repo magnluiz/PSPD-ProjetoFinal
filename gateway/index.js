@@ -29,6 +29,8 @@ const hospitalProto = grpc.loadPackageDefinition(packageDef).hospital;
 const AUTHZ_ADDR = process.env.AUTHZ_ADDR || "localhost:50051";
 const PATIENT_DATA_ADDR = process.env.PATIENT_DATA_ADDR || "localhost:50052";
 const TRANSFORM_ADDR = process.env.TRANSFORM_ADDR || "localhost:50053";
+const RESPONSE_CACHE_TTL_SECONDS = Number(process.env.RESPONSE_CACHE_TTL_SECONDS || "60");
+const responseCache = new Map();
 
 const authzClient = new hospitalProto.AuthorizationService(
   AUTHZ_ADDR,
@@ -54,6 +56,30 @@ function grpcCall(client, method, request) {
 
 function parseFHIRBundle(bundle) {
   return (bundle.entries || []).map((entry) => JSON.parse(entry.jsonPayload));
+}
+
+function cacheKey(req, parts = []) {
+  return [req.user.username, req.user.role, ...parts].join("|");
+}
+
+function getCachedResponse(key) {
+  if (RESPONSE_CACHE_TTL_SECONDS <= 0) return null;
+  const entry = responseCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    responseCache.delete(key);
+    return null;
+  }
+  return entry.body;
+}
+
+function setCachedResponse(key, body) {
+  if (RESPONSE_CACHE_TTL_SECONDS <= 0) return body;
+  responseCache.set(key, {
+    expiresAt: Date.now() + RESPONSE_CACHE_TTL_SECONDS * 1000,
+    body,
+  });
+  return body;
 }
 
 // ---------------- Prometheus metrics ----------------
@@ -95,7 +121,7 @@ app.use(express.json());
 app.use((req, res, next) => {
   res.set("Access-Control-Allow-Origin", req.header("origin") || "*");
   res.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.set("Access-Control-Allow-Headers", "Authorization,Content-Type");
+  res.set("Access-Control-Allow-Headers", "Authorization,Content-Type,X-Username");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
@@ -132,6 +158,10 @@ app.get("/api/patients/:id/historico-clinico", authMiddleware, async (req, res) 
 async function handlePatientQuery(req, res, queryType) {
   const { username, role } = req.user;
   const patientId = req.params.id;
+  const key = cacheKey(req, ["patient", queryType, patientId]);
+  const cached = getCachedResponse(key);
+  if (cached) return res.json(cached);
+
   try {
     const access = await grpcCall(authzClient, "CheckAccess", {
       username,
@@ -155,7 +185,7 @@ async function handlePatientQuery(req, res, queryType) {
     const resources = parseFHIRBundle(bundle);
     const patientResource = resources.find((resource) => resource.resourceType === "Patient") || null;
 
-    res.json({
+    const body = {
       accessLevel: access.accessLevel,
       resource: patientResource,
       bundle: {
@@ -165,7 +195,8 @@ async function handlePatientQuery(req, res, queryType) {
         entry: resources.map((resource) => ({ resource })),
       },
       resources,
-    });
+    };
+    res.json(setCachedResponse(key, body));
   } catch (err) {
     grpcErrors.inc({ service: err.service || "unknown" });
     res.status(502).json({ error: "upstream service error", detail: err.message });
@@ -175,9 +206,13 @@ async function handlePatientQuery(req, res, queryType) {
 // GET /api/patients (list of patients the caregiver can see)
 app.get("/api/patients", authMiddleware, async (req, res) => {
   const { username, role } = req.user;
+  const key = cacheKey(req, ["patients"]);
+  const cached = getCachedResponse(key);
+  if (cached) return res.json(cached);
+
   try {
     const list = await grpcCall(patientDataClient, "GetPatientsByCaregiver", { username, role });
-    res.json({ patientIds: list.patientIds });
+    res.json(setCachedResponse(key, { patientIds: list.patientIds }));
   } catch (err) {
     res.status(502).json({ error: "upstream service error", detail: err.message });
   }
@@ -187,6 +222,10 @@ app.get("/api/patients", authMiddleware, async (req, res) => {
 app.get("/api/coorte/:projectId/estatisticas", authMiddleware, async (req, res) => {
   const { username, role } = req.user;
   const projectId = req.params.projectId;
+  const key = cacheKey(req, ["coorte", "estatisticas", projectId]);
+  const cached = getCachedResponse(key);
+  if (cached) return res.json(cached);
+
   try {
     const access = await grpcCall(authzClient, "CheckAccess", {
       username,
@@ -201,7 +240,7 @@ app.get("/api/coorte/:projectId/estatisticas", authMiddleware, async (req, res) 
     }
 
     const stats = await grpcCall(patientDataClient, "GetAggregatedStats", { projectId });
-    res.json({ accessLevel: access.accessLevel, stats });
+    res.json(setCachedResponse(key, { accessLevel: access.accessLevel, stats }));
   } catch (err) {
     grpcErrors.inc({ service: err.service || "unknown" });
     res.status(502).json({ error: "upstream service error", detail: err.message });

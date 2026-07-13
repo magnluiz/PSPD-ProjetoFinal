@@ -32,11 +32,11 @@
     <div class="row">
       <div>
         <label>Gateway URL</label>
-        <input id="gatewayUrl" value="http://localhost:8080" />
+        <input id="gatewayUrl" value="https://kiriland.unb.br/grupo6" />
       </div>
       <div>
         <label>Keycloak URL</label>
-        <input id="keycloakUrl" value="http://localhost:8081" />
+        <input id="keycloakUrl" value="https://kiriland.unb.br/keycloak" />
       </div>
     </div>
     <div class="actions">
@@ -68,7 +68,7 @@
 
 <script>
 const CLIENT_ID = "hospital-frontend";
-const REALM = "hospital";
+const REALM = "grupo06";
 let auth = loadAuth();
 
 function gw() { return document.getElementById("gatewayUrl").value.replace(/\/$/, ""); }

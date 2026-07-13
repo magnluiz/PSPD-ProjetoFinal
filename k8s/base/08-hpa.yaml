@@ -1,17 +1,19 @@
 # Requires the metrics-server addon (e.g. `minikube addons enable metrics-server`)
-# HPA scales on CPU utilization, min 1 / max 10 replicas, per the spec (item 3.d).
+# HPA scales on CPU utilization. Critical API path services keep a warm
+# baseline because the project load-test stages are short; waiting for a cold
+# 1-3 pod deployment to scale causes p95 spikes before the HPA reacts.
 
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: api-gateway-hpa
-  namespace: hospital
+  namespace: grupo-6
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: api-gateway
-  minReplicas: 1
+  minReplicas: 6
   maxReplicas: 10
   metrics:
     - type: Resource
@@ -19,7 +21,7 @@ spec:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 60
+          averageUtilization: 40
   behavior:
     scaleDown:
       stabilizationWindowSeconds: 60
@@ -30,13 +32,13 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: authorization-service-hpa
-  namespace: hospital
+  namespace: grupo-6
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: authorization-service
-  minReplicas: 1
+  minReplicas: 6
   maxReplicas: 10
   metrics:
     - type: Resource
@@ -44,19 +46,19 @@ spec:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 60
+          averageUtilization: 40
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: patient-data-service-hpa
-  namespace: hospital
+  namespace: grupo-6
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: patient-data-service
-  minReplicas: 1
+  minReplicas: 6
   maxReplicas: 10
   metrics:
     - type: Resource
@@ -64,19 +66,19 @@ spec:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 60
+          averageUtilization: 40
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: data-transform-service-hpa
-  namespace: hospital
+  namespace: grupo-6
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: data-transform-service
-  minReplicas: 1
+  minReplicas: 3
   maxReplicas: 10
   metrics:
     - type: Resource
@@ -84,4 +86,4 @@ spec:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 60
+          averageUtilization: 40

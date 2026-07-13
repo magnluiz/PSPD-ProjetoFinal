@@ -6,6 +6,8 @@ node_modules/
 __pycache__/
 *.pyc
 .env
+kubeconfig*.yaml
+*.pdf
 db/seed.sql
 load-tests/*/results/
 *.log

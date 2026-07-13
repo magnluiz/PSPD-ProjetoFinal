@@ -22,6 +22,10 @@ spec:
     metadata:
       labels: { app: postgres }
     spec:
+      # minikube's hostPath provisioner stores PVC data on the primary node.
+      # Pinning Postgres there avoids hostPath misses in multi-node clusters.
+      nodeSelector:
+        kubernetes.io/hostname: minikube
       containers:
         - name: postgres
           image: postgres:16

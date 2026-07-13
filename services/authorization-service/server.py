@@ -8,10 +8,13 @@ data itself -- only relationship/authorization data.
 """
 import logging
 import os
+import threading
+import time
 from concurrent import futures
+from contextlib import contextmanager
 
 import grpc
-import psycopg2
+from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 from prometheus_client import Counter, Histogram, start_http_server
 
@@ -25,6 +28,12 @@ DB_DSN = os.environ.get(
     "DATABASE_URL",
     "host=localhost port=5432 dbname=hospital user=hospital password=hospital",
 )
+DB_POOL_MIN = int(os.environ.get("DB_POOL_MIN", "1"))
+DB_POOL_MAX = int(os.environ.get("DB_POOL_MAX", "20"))
+AUTHZ_CACHE_TTL_SECONDS = float(os.environ.get("AUTHZ_CACHE_TTL_SECONDS", "30"))
+DB_POOL = None
+AUTHZ_CACHE = {}
+AUTHZ_CACHE_LOCK = threading.Lock()
 
 REQUEST_COUNT = Counter(
     "authz_requests_total", "Total CheckAccess requests", ["role", "decision"]
@@ -34,40 +43,93 @@ REQUEST_LATENCY = Histogram(
 )
 
 
+def _get_pool():
+    global DB_POOL
+    if DB_POOL is None:
+        DB_POOL = pool.ThreadedConnectionPool(DB_POOL_MIN, DB_POOL_MAX, DB_DSN)
+    return DB_POOL
+
+
+@contextmanager
 def get_conn():
-    return psycopg2.connect(DB_DSN)
+    conn = _get_pool().getconn()
+    try:
+        yield conn
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        _get_pool().putconn(conn)
 
 
 class AuthorizationServicer(hospital_pb2_grpc.AuthorizationServiceServicer):
     def CheckAccess(self, request, context):
         with REQUEST_LATENCY.time():
             role = request.role.lower()
-            if role == "medico":
-                decision = self._check_medico(request)
-            elif role == "estagiario":
-                decision = self._check_estagiario(request)
-            elif role == "pesquisador":
-                decision = self._check_pesquisador(request)
-            else:
-                decision = hospital_pb2.AccessResponse(
-                    allow=False, access_level="", reason=f"unknown role '{request.role}'"
-                )
+            cache_key = (
+                request.username,
+                role,
+                request.patient_id,
+                request.project_id,
+                request.query_type,
+            )
+            decision = self._get_cached_decision(cache_key)
+            if decision is None:
+                if role == "medico":
+                    decision = self._check_medico(request)
+                elif role == "estagiario":
+                    decision = self._check_estagiario(request)
+                elif role == "pesquisador":
+                    decision = self._check_pesquisador(request)
+                else:
+                    decision = hospital_pb2.AccessResponse(
+                        allow=False, access_level="", reason=f"unknown role '{request.role}'"
+                    )
+                self._cache_decision(cache_key, decision)
 
             REQUEST_COUNT.labels(
                 role=role or "unknown", decision="ALLOW" if decision.allow else "DENY"
             ).inc()
             return decision
 
+    def _get_cached_decision(self, cache_key):
+        if AUTHZ_CACHE_TTL_SECONDS <= 0:
+            return None
+        now = time.monotonic()
+        with AUTHZ_CACHE_LOCK:
+            cached = AUTHZ_CACHE.get(cache_key)
+            if not cached:
+                return None
+            expires_at, allow, access_level, reason = cached
+            if expires_at <= now:
+                AUTHZ_CACHE.pop(cache_key, None)
+                return None
+        return hospital_pb2.AccessResponse(
+            allow=allow, access_level=access_level, reason=reason
+        )
+
+    def _cache_decision(self, cache_key, decision):
+        if AUTHZ_CACHE_TTL_SECONDS <= 0:
+            return
+        value = (
+            time.monotonic() + AUTHZ_CACHE_TTL_SECONDS,
+            decision.allow,
+            decision.access_level,
+            decision.reason,
+        )
+        with AUTHZ_CACHE_LOCK:
+            AUTHZ_CACHE[cache_key] = value
+
     def _check_medico(self, request):
-        """Médico só pode acessar pacientes vinculados a ele."""
+        """Médico só pode acessar pacientes vinculados a ele (assignment_type = ATTENDING)."""
         if not request.patient_id:
             return hospital_pb2.AccessResponse(allow=False, reason="patient_id required")
         with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
                 SELECT 1 FROM user_patient_assignments
-                WHERE username_cuidador = %s AND patient_id = %s
-                  AND tipo_vinculo = 'medico' AND status = 'ativo'
+                WHERE username = %s AND patient_id = %s
+                  AND assignment_type = 'ATTENDING' AND active = true
                 """,
                 (request.username, request.patient_id),
             )
@@ -78,16 +140,17 @@ class AuthorizationServicer(hospital_pb2_grpc.AuthorizationServiceServicer):
         )
 
     def _check_estagiario(self, request):
-        """Estagiário só pode acessar pacientes de uma atividade supervisionada ativa."""
+        """Estagiário só pode acessar pacientes de uma atividade supervisionada ativa
+        (assignment_type = TRAINEE, com supervisor_username preenchido)."""
         if not request.patient_id:
             return hospital_pb2.AccessResponse(allow=False, reason="patient_id required")
         with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
                 SELECT 1 FROM user_patient_assignments
-                WHERE username_cuidador = %s AND patient_id = %s
-                  AND tipo_vinculo = 'estagiario' AND status = 'ativo'
-                  AND username_supervisor IS NOT NULL
+                WHERE username = %s AND patient_id = %s
+                  AND assignment_type = 'TRAINEE' AND active = true
+                  AND supervisor_username IS NOT NULL
                 """,
                 (request.username, request.patient_id),
             )
@@ -98,27 +161,28 @@ class AuthorizationServicer(hospital_pb2_grpc.AuthorizationServiceServicer):
         )
 
     def _check_pesquisador(self, request):
-        """Pesquisador só pode acessar coortes de projetos aprovados e vigentes."""
+        """Pesquisador só pode acessar coortes de projetos aprovados e vigentes
+        (status = APPROVED em projects)."""
         if not request.project_id:
             return hospital_pb2.AccessResponse(allow=False, reason="project_id required")
         with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT status, data_validade FROM projects
-                WHERE projeto_id = %s AND username_pesquisador = %s
+                SELECT status, valid_until FROM projects
+                WHERE project_id = %s AND researcher_username = %s
                 """,
                 (request.project_id, request.username),
             )
             row = cur.fetchone()
             if not row:
                 return hospital_pb2.AccessResponse(allow=False, reason="projeto não encontrado")
-            if row["status"] != "Aprovado":
+            if row["status"] != "APPROVED":
                 return hospital_pb2.AccessResponse(
                     allow=False, reason=f"projeto com status '{row['status']}'"
                 )
             import datetime
 
-            if row["data_validade"] and row["data_validade"] < datetime.date.today():
+            if row["valid_until"] and row["valid_until"] < datetime.date.today():
                 return hospital_pb2.AccessResponse(allow=False, reason="projeto expirado")
 
             level = (

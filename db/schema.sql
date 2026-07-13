@@ -1,59 +1,79 @@
--- Hospital pseudo-prontuário schema
--- Matches the tables described in the PSPD project spec.
+-- Hospital pseudo-prontuario schema.
+-- Mirrors the schema provided for each group in the shared course database.
 
 CREATE TABLE IF NOT EXISTS patients (
-    patient_id      VARCHAR(10) PRIMARY KEY,
-    full_name       VARCHAR(200) NOT NULL,
-    birth_date      DATE NOT NULL,
-    gender          VARCHAR(10) NOT NULL,
-    city            VARCHAR(100),
-    state           VARCHAR(2),
-    cpf             VARCHAR(14),
-    cns             VARCHAR(20)
+    patient_id VARCHAR(10) PRIMARY KEY,
+    full_name VARCHAR(200) NOT NULL,
+    birth_date DATE NOT NULL,
+    gender VARCHAR(10) NOT NULL CHECK (gender IN ('male', 'female')),
+    city VARCHAR(100) NOT NULL,
+    state CHAR(2) NOT NULL,
+    cpf VARCHAR(14) NOT NULL UNIQUE,
+    cns VARCHAR(20) NOT NULL UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS encounters (
-    encounter_id    SERIAL PRIMARY KEY,
-    patient_id      VARCHAR(10) REFERENCES patients(patient_id),
-    data_inicio     TIMESTAMP NOT NULL,
-    data_fim        TIMESTAMP,
-    tipo_atendimento VARCHAR(50),
-    setor           VARCHAR(50)
+    encounter_id VARCHAR(20) PRIMARY KEY,
+    patient_id VARCHAR(10) NOT NULL REFERENCES patients(patient_id),
+    start_date TIMESTAMP NOT NULL,
+    end_date TIMESTAMP,
+    encounter_type VARCHAR(50) NOT NULL CHECK (
+        encounter_type IN ('AMBULATORIAL', 'EMERGENCY', 'INPATIENT', 'ICU', 'FOLLOW_UP', 'TELEHEALTH')
+    ),
+    department VARCHAR(50) NOT NULL CHECK (
+        department IN (
+            'CARDIOLOGY', 'ENDOCRINOLOGY', 'NEPHROLOGY', 'PULMONOLOGY',
+            'INTERNAL_MEDICINE', 'EMERGENCY', 'ICU', 'PEDIATRICS',
+            'GERIATRICS', 'INFECTIOUS_DISEASES', 'SURGERY', 'OBSTETRICS',
+            'ORTHOPEDICS', 'ONCOLOGY', 'TELEMEDICINE'
+        )
+    )
 );
 
 CREATE TABLE IF NOT EXISTS clinical_events (
-    evento_id       SERIAL PRIMARY KEY,
-    patient_id      VARCHAR(10) REFERENCES patients(patient_id),
-    encounter_id    INTEGER REFERENCES encounters(encounter_id),
-    tipo_evento     VARCHAR(20) NOT NULL CHECK (tipo_evento IN ('Condicao','Observacao','Medicacao')),
-    codigo_evento   VARCHAR(50) NOT NULL,
-    descricao       TEXT,
-    data_evento     TIMESTAMP NOT NULL,
-    valor           NUMERIC,
-    unidade         VARCHAR(20)
+    event_id VARCHAR(20) PRIMARY KEY,
+    patient_id VARCHAR(10) NOT NULL REFERENCES patients(patient_id),
+    encounter_id VARCHAR(20) NOT NULL REFERENCES encounters(encounter_id),
+    event_type VARCHAR(20) NOT NULL CHECK (
+        event_type IN ('CONDITION', 'OBSERVATION', 'MEDICATION')
+    ),
+    code VARCHAR(50) NOT NULL,
+    description VARCHAR(255) NOT NULL,
+    value VARCHAR(50),
+    unit VARCHAR(20),
+    event_date TIMESTAMP NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS user_patient_assignments (
-    vinculo_id      SERIAL PRIMARY KEY,
-    username_cuidador VARCHAR(50) NOT NULL,
-    patient_id      VARCHAR(10) REFERENCES patients(patient_id),
-    tipo_vinculo    VARCHAR(20) NOT NULL CHECK (tipo_vinculo IN ('medico','estagiario')),
-    username_supervisor VARCHAR(50),
-    status          VARCHAR(20) NOT NULL CHECK (status IN ('ativo','encerrado'))
+    assignment_id VARCHAR(30) PRIMARY KEY,
+    username VARCHAR(50) NOT NULL,
+    patient_id VARCHAR(10) NOT NULL REFERENCES patients(patient_id),
+    assignment_type VARCHAR(20) NOT NULL CHECK (
+        assignment_type IN ('ATTENDING', 'TRAINEE')
+    ),
+    supervisor_username VARCHAR(50),
+    active BOOLEAN NOT NULL DEFAULT true
 );
 
 CREATE TABLE IF NOT EXISTS projects (
-    projeto_id      SERIAL PRIMARY KEY,
-    titulo          VARCHAR(200),
-    username_pesquisador VARCHAR(50) NOT NULL,
-    codigo_condicao VARCHAR(50) NOT NULL,
-    status          VARCHAR(20) NOT NULL CHECK (status IN ('Aprovado','Expirado','Suspenso')),
-    data_validade   DATE
+    project_id VARCHAR(20) PRIMARY KEY,
+    title VARCHAR(200) NOT NULL,
+    researcher_username VARCHAR(50) NOT NULL,
+    target_condition_code VARCHAR(50) NOT NULL,
+    status VARCHAR(20) NOT NULL CHECK (
+        status IN ('APPROVED', 'PENDING', 'EXPIRED', 'REJECTED', 'SUSPENDED')
+    ),
+    valid_until DATE NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_encounters_patient ON encounters(patient_id);
 CREATE INDEX IF NOT EXISTS idx_events_patient ON clinical_events(patient_id);
-CREATE INDEX IF NOT EXISTS idx_events_codigo ON clinical_events(codigo_evento);
-CREATE INDEX IF NOT EXISTS idx_upa_cuidador ON user_patient_assignments(username_cuidador);
-CREATE INDEX IF NOT EXISTS idx_upa_patient ON user_patient_assignments(patient_id);
-CREATE INDEX IF NOT EXISTS idx_projects_pesquisador ON projects(username_pesquisador);
+CREATE INDEX IF NOT EXISTS idx_events_code ON clinical_events(code);
+CREATE INDEX IF NOT EXISTS idx_events_cohort ON clinical_events(code, event_type, patient_id);
+CREATE INDEX IF NOT EXISTS idx_assignments_user ON user_patient_assignments(username);
+CREATE INDEX IF NOT EXISTS idx_assignments_patient ON user_patient_assignments(patient_id);
+CREATE INDEX IF NOT EXISTS idx_assignments_access
+    ON user_patient_assignments(username, patient_id, assignment_type, active);
+CREATE INDEX IF NOT EXISTS idx_projects_researcher ON projects(researcher_username);
+CREATE INDEX IF NOT EXISTS idx_projects_access
+    ON projects(project_id, researcher_username, status, valid_until);

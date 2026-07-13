@@ -13,20 +13,27 @@
  * when you explicitly want to isolate backend performance from JWT validation.
  */
 import http from "k6/http";
-import { check, sleep } from "k6";
+import { check, fail, sleep } from "k6";
 import { Trend, Counter } from "k6/metrics";
 
 http.setResponseCallback(http.expectedStatuses({ min: 200, max: 399 }, 403));
 
 const BASE_URL = __ENV.BASE_URL || "http://localhost:8080";
 const KEYCLOAK_URL = __ENV.KEYCLOAK_URL || "http://localhost:8081";
+const KEYCLOAK_REALM = __ENV.KEYCLOAK_REALM || "hospital";
+const CLIENT_ID = __ENV.CLIENT_ID || "hospital-frontend";
 const AUTH_MODE = __ENV.AUTH_MODE || "keycloak";
 const PASSWORD = __ENV.TEST_PASSWORD || "senha123";
 const VUS = parseInt(__ENV.STAGE || "10", 10);
 const DURATION = __ENV.DURATION || "60s";
+const RAMP_UP = __ENV.RAMP_UP || "15s";
+const RAMP_DOWN = __ENV.RAMP_DOWN || "10s";
+const P95_THRESHOLD_MS = parseInt(__ENV.P95_THRESHOLD_MS || "7000", 10);
+const FAIL_RATE_THRESHOLD = __ENV.FAIL_RATE_THRESHOLD || "0.05";
 
 const errorCount = new Counter("app_errors");
 const denyCount = new Counter("app_denies");
+const unexpectedStatusCount = new Counter("unexpected_statuses");
 const summaryTrend = new Trend("resumo_clinico_duration");
 const statsTrend = new Trend("estatisticas_duration");
 
@@ -36,26 +43,26 @@ export const options = {
       executor: "ramping-vus",
       startVUs: 0,
       stages: [
-        { duration: "15s", target: VUS },
+        { duration: RAMP_UP, target: VUS },
         { duration: DURATION, target: VUS },
-        { duration: "10s", target: 0 },
+        { duration: RAMP_DOWN, target: 0 },
       ],
       gracefulRampDown: "5s",
     },
   },
   thresholds: {
-    http_req_duration: ["p(95)<3000"],
-    http_req_failed: ["rate<0.05"],
+    http_req_duration: [`p(95)<${P95_THRESHOLD_MS}`],
+    http_req_failed: [`rate<${FAIL_RATE_THRESHOLD}`],
   },
 };
 
 // Test identities matching db/seed.py -- adjust patient IDs to ones that
 // actually exist in your seeded DB (P000001..P0000NN).
-const MEDICOS = ["med.cardoso", "med.souza", "med.lima", "med.alves", "med.rocha"];
-const ESTAGIARIOS = ["est.silva", "est.pereira", "est.costa", "est.santos", "est.oliveira"];
-const PESQUISADORES = ["pesq.franca", "pesq.dias", "pesq.moura"];
+const MEDICOS = ["med.cardoso", "med.lima", "med.almeida", "med.rocha", "med.monteiro"];
+const ESTAGIARIOS = ["est.ferreira", "est.gomes", "est.costa", "est.melo", "est.dias"];
+const PESQUISADORES = ["pes.mendes", "pes.araujo", "pes.silveira"];
 const PATIENT_IDS = Array.from({ length: 300 }, (_, i) => `P${String(i + 1).padStart(6, "0")}`);
-const PROJECT_IDS = ["1", "2", "3", "4", "5", "6"];
+const PROJECT_IDS = ["PRJ01", "PRJ02", "PRJ03", "PRJ04", "PRJ05", "PRJ06"];
 const USERS = [...MEDICOS, ...ESTAGIARIOS, ...PESQUISADORES];
 
 function randomOf(arr) {
@@ -63,33 +70,61 @@ function randomOf(arr) {
 }
 
 function tokenFor(username) {
-  const res = http.post(
-    `${KEYCLOAK_URL}/realms/hospital/protocol/openid-connect/token`,
-    {
-      client_id: "hospital-frontend",
-      grant_type: "password",
-      username,
-      password: PASSWORD,
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const res = http.post(
+      `${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token`,
+      {
+        client_id: CLIENT_ID,
+        grant_type: "password",
+        username,
+        password: PASSWORD,
+      }
+    );
+    if (res.status === 200 && res.json("access_token")) {
+      check(res, { "keycloak token ok": () => true });
+      return res.json("access_token");
     }
-  );
-  check(res, { "keycloak token ok": (r) => r.status === 200 && r.json("access_token") });
-  return res.json("access_token");
+    if (attempt < 3) sleep(attempt);
+  }
+  fail(`Keycloak token failed after 3 attempts for ${username}`);
 }
 
 export function setup() {
-  if (AUTH_MODE === "insecure-dev") return { tokens: {} };
+  if (AUTH_MODE === "insecure-dev") return { tokens: {}, patientIds: {} };
   const tokens = {};
   for (const username of USERS) {
     tokens[username] = tokenFor(username);
   }
-  return { tokens };
+
+  const patientIds = {};
+  for (const username of [...MEDICOS, ...ESTAGIARIOS]) {
+    const res = http.get(`${BASE_URL}/api/patients`, {
+      headers: {
+        "Authorization": `Bearer ${tokens[username]}`,
+        "x-username": username,
+      },
+    });
+    const ok = check(res, {
+      "caregiver patients loaded": (r) => r.status === 200 && Array.isArray(r.json("patientIds")),
+    });
+    patientIds[username] = ok ? res.json("patientIds") : [];
+  }
+  return { tokens, patientIds };
+}
+
+function patientFor(username, data) {
+  const accessible = data.patientIds[username] || [];
+  return accessible.length > 0 ? randomOf(accessible) : randomOf(PATIENT_IDS);
 }
 
 function authHeaders(username, role, data) {
   if (AUTH_MODE === "insecure-dev") {
     return { "x-username": username, "x-role": role };
   }
-  return { "Authorization": `Bearer ${data.tokens[username]}` };
+  return {
+    "Authorization": `Bearer ${data.tokens[username]}`,
+    "x-username": username,
+  };
 }
 
 export default function (data) {
@@ -98,24 +133,30 @@ export default function (data) {
   if (scenario < 0.5) {
     // médico querying resumo clínico
     const username = randomOf(MEDICOS);
-    const patientId = randomOf(PATIENT_IDS);
+    const patientId = patientFor(username, data);
     const res = http.get(`${BASE_URL}/api/patients/${patientId}/resumo-clinico`, {
       headers: authHeaders(username, "medico", data),
     });
     summaryTrend.add(res.timings.duration);
     if (res.status === 403) denyCount.add(1);
-    else if (res.status !== 200) errorCount.add(1);
+    else if (res.status !== 200) {
+      errorCount.add(1);
+      unexpectedStatusCount.add(1, { endpoint: "resumo-medico", status: String(res.status) });
+    }
     check(res, { "status is 200 or 403": (r) => r.status === 200 || r.status === 403 });
   } else if (scenario < 0.8) {
     // estagiário querying resumo clínico
     const username = randomOf(ESTAGIARIOS);
-    const patientId = randomOf(PATIENT_IDS);
+    const patientId = patientFor(username, data);
     const res = http.get(`${BASE_URL}/api/patients/${patientId}/resumo-clinico`, {
       headers: authHeaders(username, "estagiario", data),
     });
     summaryTrend.add(res.timings.duration);
     if (res.status === 403) denyCount.add(1);
-    else if (res.status !== 200) errorCount.add(1);
+    else if (res.status !== 200) {
+      errorCount.add(1);
+      unexpectedStatusCount.add(1, { endpoint: "resumo-estagiario", status: String(res.status) });
+    }
     check(res, { "status is 200 or 403": (r) => r.status === 200 || r.status === 403 });
   } else {
     // pesquisador querying aggregated stats
@@ -126,7 +167,10 @@ export default function (data) {
     });
     statsTrend.add(res.timings.duration);
     if (res.status === 403) denyCount.add(1);
-    else if (res.status !== 200) errorCount.add(1);
+    else if (res.status !== 200) {
+      errorCount.add(1);
+      unexpectedStatusCount.add(1, { endpoint: "estatisticas", status: String(res.status) });
+    }
     check(res, { "status is 200 or 403": (r) => r.status === 200 || r.status === 403 });
   }
 

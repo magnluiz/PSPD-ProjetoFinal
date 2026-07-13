@@ -292,10 +292,3 @@ docs/images/
 ## Desenvolvimento local
 
 O projeto ainda mantém `docker-compose.yaml`, `deploy.sh` e `k8s/monitoring/` como apoio para execução local/minikube. Esse fluxo não foi o ambiente final de avaliação. Para o cluster do professor, use os manifests de `k8s/base/` conforme descrito acima e não suba uma stack própria de Prometheus/Grafana.
-
-## Observações importantes
-
-- O banco real do professor usa IDs textuais e enums em caixa alta; `db/schema.sql` e `db/seed.py` já refletem isso.
-- As imagens configuradas nos manifests usam o padrão `coimbrasdan/hospital-*:g6`.
-- Algumas correções foram aplicadas no cluster via ConfigMap override durante os testes, porque o push de imagem Docker pode depender da autenticação do mantenedor da conta Docker Hub.
-- Antes de uma entrega definitiva operacional, publique novas imagens Docker com o código atual e reaplique os manifests.

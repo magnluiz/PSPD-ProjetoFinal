@@ -1,5 +1,20 @@
 # Hospital Microservices - PSPD 2026/1
 
+## Dados do curso
+
+- Curso: Engenharia de Software - Faculdade UnB Gama
+- Disciplina/Turma: PSPD - Programação para Sistemas Paralelos e Distribuídos, 2026/1
+- Professor: Fernando W. Cruz
+- Data dos testes: 12/07/2026
+- Alunos participantes:
+  - Arthur Augusto Rezende da Paixão - 211031600
+  - Daniel Coimbra dos Santos - 180113097
+  - Magno Luiz Vale Vieira - 180042696
+
+[LINK DO VÍDEO DA APRESENTAÇÃO](https://unbbr-my.sharepoint.com/:v:/g/personal/180113097_aluno_unb_br/IQDzUfdqRhwRQaT5Yrq-pF6IARHZQ8YLtPZ5344-rNdC7Sc?e=O9myCM&nav=eyJyZWZlcnJhbEluZm8iOnsicmVmZXJyYWxBcHAiOiJTdHJlYW1XZWJBcHAiLCJyZWZlcnJhbFZpZXciOiJTaGFyZURpYWxvZy1MaW5rIiwicmVmZXJyYWxBcHBQbGF0Zm9ybSI6IldlYiIsInJlZmVycmFsTW9kZSI6InZpZXcifX0%3D)
+
+<br>
+
 Aplicação hospitalar em microsserviços para o trabalho final de PSPD, implantada no cluster Kubernetes compartilhado do professor no namespace `grupo-6`.
 
 O sistema expõe um pseudo-prontuário com autenticação via Keycloak, autorização por perfil, acesso a dados clínicos no PostgreSQL do grupo, transformação para HL7/FHIR, testes de carga com k6/Locust e observabilidade via Prometheus/Grafana/Rancher Monitoring.

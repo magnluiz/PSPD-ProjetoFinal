@@ -30,6 +30,7 @@ const RAMP_UP = __ENV.RAMP_UP || "15s";
 const RAMP_DOWN = __ENV.RAMP_DOWN || "10s";
 const P95_THRESHOLD_MS = parseInt(__ENV.P95_THRESHOLD_MS || "7000", 10);
 const FAIL_RATE_THRESHOLD = __ENV.FAIL_RATE_THRESHOLD || "0.05";
+const SETUP_TIMEOUT = __ENV.SETUP_TIMEOUT || "180s";
 
 const errorCount = new Counter("app_errors");
 const denyCount = new Counter("app_denies");
@@ -38,6 +39,7 @@ const summaryTrend = new Trend("resumo_clinico_duration");
 const statsTrend = new Trend("estatisticas_duration");
 
 export const options = {
+  setupTimeout: SETUP_TIMEOUT,
   scenarios: {
     ramping_load: {
       executor: "ramping-vus",

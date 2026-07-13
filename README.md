@@ -125,19 +125,16 @@ Observação: o cliente `admin-cli` gera tokens válidos, mas sem todos os claim
 
 ## Validação funcional
 
-Teste rápido da aplicação pública:
+Teste rápido da aplicação pública. O script usa os parâmetros do cluster final
+e, quando `TEST_PASSWORD` não estiver definida, lê a credencial de teste já
+documentada neste README sem imprimi-la no terminal:
 
 ```bash
-BASE_URL=https://kiriland.unb.br/grupo6 \
-KEYCLOAK_URL=https://kiriland.unb.br/keycloak \
-KEYCLOAK_REALM=grupo06 \
-CLIENT_ID=admin-cli \
-TEST_PASSWORD='PseudoPEP2026!' \
 STAGE=10 \
 DURATION=15s \
 RAMP_UP=5s \
 RAMP_DOWN=5s \
-k6 run load-tests/k6/load-test.js
+load-tests/k6/run-live.sh
 ```
 
 Fluxos validados:
@@ -150,33 +147,23 @@ Fluxos validados:
 
 ## Testes de carga
 
-Script principal:
+Script principal (executa 10, 50, 100, 500 e 1000 VUs e salva os resumos em
+`load-tests/k6/results/`):
 
 ```bash
-cd load-tests/k6
-BASE_URL=https://kiriland.unb.br/grupo6 \
-KEYCLOAK_URL=https://kiriland.unb.br/keycloak \
-KEYCLOAK_REALM=grupo06 \
-CLIENT_ID=admin-cli \
-TEST_PASSWORD='PseudoPEP2026!' \
 P95_THRESHOLD_MS=7000 \
-./run-all.sh
+load-tests/k6/run-all.sh
 ```
 
 Também é possível rodar um estágio isolado:
 
 ```bash
-BASE_URL=https://kiriland.unb.br/grupo6 \
-KEYCLOAK_URL=https://kiriland.unb.br/keycloak \
-KEYCLOAK_REALM=grupo06 \
-CLIENT_ID=admin-cli \
-TEST_PASSWORD='PseudoPEP2026!' \
 STAGE=1000 \
 DURATION=60s \
 RAMP_UP=15s \
 RAMP_DOWN=10s \
 P95_THRESHOLD_MS=10000 \
-k6 run --summary-export load-tests/k6/results/final-1000vus.json load-tests/k6/load-test.js
+load-tests/k6/run-live.sh
 ```
 
 Resultados finais medidos no cluster:

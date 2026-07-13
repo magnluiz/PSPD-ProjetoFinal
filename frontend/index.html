@@ -11,6 +11,8 @@
   input, select { padding: 6px 8px; width: 100%; box-sizing: border-box; }
   button { margin-top: 12px; padding: 8px 16px; cursor: pointer; }
   button:disabled { cursor: not-allowed; opacity: 0.55; }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; color: #555; font-size: 0.85rem; }
   pre { background: #f4f4f8; padding: 12px; border-radius: 8px; overflow-x: auto; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -40,27 +42,32 @@
         <input id="keycloakUrl" value="https://kiriland.unb.br/keycloak" />
       </div>
     </div>
-    <div class="row">
-      <div>
-        <label>Usuário de teste</label>
-        <input id="username" value="med.cardoso" />
-      </div>
-      <div>
-        <label>Senha de teste</label>
-        <input id="password" type="password" value="PseudoPEP2026!" />
-      </div>
-    </div>
-    <label>Client ID</label>
-    <input id="clientId" value="admin-cli" />
     <div class="actions">
-      <button id="loginBtn" onclick="loginPasswordGrant()">Login de teste</button>
-      <button id="oidcLoginBtn" onclick="login()">Login OIDC/PKCE</button>
+      <button id="loginBtn" onclick="loginPasswordGrant()">Login Keycloak</button>
       <button id="logoutBtn" onclick="logout()" disabled>Sair</button>
     </div>
-    <div class="hint">
-      No cluster do professor, o client confirmado para testes é <code>admin-cli</code>.
-      O login OIDC/PKCE depende de um client público configurado no Keycloak.
-    </div>
+    <details>
+      <summary>Configuração de autenticação para testes</summary>
+      <div class="row">
+        <div>
+          <label>Usuário de teste</label>
+          <input id="username" value="med.cardoso" />
+        </div>
+        <div>
+          <label>Senha de teste</label>
+          <input id="password" type="password" value="PseudoPEP2026!" />
+        </div>
+      </div>
+      <label>Client ID</label>
+      <input id="clientId" value="admin-cli" />
+      <div class="actions">
+        <button id="oidcLoginBtn" onclick="login()">Login OIDC/PKCE</button>
+      </div>
+      <div class="hint">
+        No cluster do professor, o client confirmado para testes é <code>admin-cli</code>.
+        O login OIDC/PKCE depende de um client público configurado no Keycloak.
+      </div>
+    </details>
     <div id="authStatus" class="status">Não autenticado</div>
   </fieldset>
 

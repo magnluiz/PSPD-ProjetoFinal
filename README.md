@@ -1,222 +1,286 @@
-# Hospital Microservices — Monitoramento/Observabilidade em K8S
+# Hospital Microservices - PSPD 2026/1
 
-Projeto PSPD 2026/1 — aplicação de microsserviços HL7/FHIR para um Hospital
-Universitário, instanciada em cluster Kubernetes com observabilidade via
-Prometheus + Grafana.
+Aplicação hospitalar em microsserviços para o trabalho final de PSPD, implantada no cluster Kubernetes compartilhado do professor no namespace `grupo-6`.
+
+O sistema expõe um pseudo-prontuário com autenticação via Keycloak, autorização por perfil, acesso a dados clínicos no PostgreSQL do grupo, transformação para HL7/FHIR, testes de carga com k6/Locust e observabilidade via Prometheus/Grafana/Rancher Monitoring.
 
 ## Arquitetura
 
-```
-Frontend --HTTP/OIDC--> Keycloak
-Frontend --HTTP/JWT--> API Gateway --gRPC/HTTP2--> Authorization Service
-                                 --gRPC/HTTP2--> Patient Data Service --SQL--> PostgreSQL
-                                 --gRPC/HTTP2--> Data Transform Service
+```text
+Frontend
+  -> API Gateway (REST/JWT)
+      -> Authorization Service (gRPC)
+      -> Patient Data Service (gRPC -> PostgreSQL)
+      -> Data Transform Service (gRPC -> FHIR)
+
+Keycloak -> tokens OIDC
+Prometheus/Grafana -> métricas e dashboards
 ```
 
-- **API Gateway** (Node.js/Express): REST endpoints, valida JWT (Keycloak), roteia gRPC, consolida respostas.
-- **Authorization Service** (Python/gRPC): decide ALLOW/DENY + nível de acesso (FULL/PARTIAL/ANONYMIZED/AGGREGATED).
-- **Patient Data Service** (Python/gRPC): único serviço que acessa as tabelas clínicas no PostgreSQL.
-- **Data Transform Service** (Python/gRPC): anonimização, agregação e conversão para HL7/FHIR.
+Componentes:
 
-Os 4 tipos de comunicação gRPC estão demonstrados:
-- **Unary**: `CheckAccess`, `GetPatientSummary`, `ToFHIRPatient`, etc.
-- **Server streaming**: `PatientDataService.StreamCohortData`
-- **Client streaming**: `DataTransformService.CollectFHIRBundle`
-- **Bidirectional streaming**: `DataTransformService.TransformPipeline`
+- `frontend`: interface HTML servida por Nginx.
+- `gateway`: API Gateway em Node.js/Express. Valida autenticação, chama os serviços gRPC e expõe `/metrics`.
+- `services/authorization-service`: decide `ALLOW`/`DENY` e nível de acesso (`FULL`, `PARTIAL`, `ANONYMIZED`, `AGGREGATED`).
+- `services/patient-data-service`: único serviço que acessa o PostgreSQL real do grupo.
+- `services/data-transform-service`: anonimização, agregação e conversão para recursos FHIR.
+- `db/schema.sql` e `db/seed.py`: schema e carga sintética alinhados ao schema real do banco do professor.
+- `load-tests/k6` e `load-tests/locust`: testes de carga.
+- `docs/relatorio.md`: relatório final com resultados e prints do Grafana.
+
+## Estado atual do deploy
+
+Ambiente final:
+
+```text
+Namespace: grupo-6
+Frontend/API: https://kiriland.unb.br/grupo6
+Keycloak: https://kiriland.unb.br/keycloak
+Realm: grupo06
+Client ID usado nos testes: admin-cli
+```
+
+Os manifests principais estão em `k8s/base/`.
+
+Importante:
+
+- Não aplique `k8s/monitoring/` no cluster compartilhado. O Prometheus/Grafana já existem via Rancher Monitoring.
+- Não aplique manifests locais de PostgreSQL/Keycloak no cluster do professor. O projeto usa o banco e o Keycloak compartilhados.
+- O arquivo `k8s/base/kubeconfig-grupo-6.yaml` é credencial local e está ignorado pelo Git.
+- Os resultados brutos de k6 ficam em `load-tests/k6/results/` e também são ignorados pelo Git.
 
 ## Estrutura do repositório
 
-```
-proto/                  hospital.proto (contrato gRPC compartilhado)
-services/
-  authorization-service/  (Python + grpcio)
-  patient-data-service/   (Python + grpcio + psycopg2)
-  data-transform-service/ (Python + grpcio)
-gateway/                 API Gateway (Node.js/Express)
-frontend/                Frontend HTML servido por Nginx, login OIDC/PKCE
+```text
 db/
-  schema.sql             DDL das 5 tabelas
-  seed.py                gerador de dados sintéticos (Faker, seed fixo)
-keycloak/
-  hospital-realm.json    realm com roles medico/estagiario/pesquisador + usuários de teste
+  schema.sql
+  seed.py
+docs/
+  relatorio.md
+  images/
+frontend/
+gateway/
 k8s/
-  base/                  Deployments/Services/HPA de todos os componentes
-  monitoring/            Prometheus (RBAC + scrape via anotações) + Grafana
+  base/
+  monitoring/        # apenas referência local; não aplicar no cluster compartilhado
 load-tests/
-  k6/load-test.js        cenário de carga (10/50/100/500/1000 VUs)
-  locust/locustfile.py   equivalente em Locust
-docker-compose.yaml       validação funcional local (sem K8s)
-deploy.sh                 build + deploy completo no minikube
-docs/relatorio.md         esqueleto do relatório (Seção 4 da especificação)
+  k6/
+  locust/
+services/
+  authorization-service/
+  patient-data-service/
+  data-transform-service/
 ```
 
-## 1. Validação funcional local (Docker Compose)
+## Deploy no cluster do professor
 
-Réplica única de cada serviço + 1 instância do Postgres, conforme item 3.a
-da especificação.
+Antes de aplicar, confirme as permissões:
 
 ```bash
-python3 -m pip install -r db/requirements.txt
-python3 db/seed.py --patients 500 --out db/seed.sql
-docker compose up --build
+kubectl auth can-i create deployments -n grupo-6 --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl auth can-i create ingresses -n grupo-6 --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
 ```
 
-Isso sobe: postgres, keycloak (com realm importado), os 3 microsserviços,
-o gateway, frontend, prometheus e grafana. Endpoints:
-- Gateway: http://localhost:8080
-- Frontend: http://localhost:8082
-- Keycloak: http://localhost:8081 (admin/admin)
-- Prometheus: http://localhost:9090
-- Grafana: http://localhost:3000 (admin/admin)
-
-Obtendo um token JWT real do Keycloak (usuário `med.cardoso`, senha `senha123`):
+Aplicação recomendada dos manifests:
 
 ```bash
-curl -X POST http://localhost:8081/realms/hospital/protocol/openid-connect/token \
-  -d "client_id=hospital-frontend" -d "grant_type=password" \
-  -d "username=med.cardoso" -d "password=senha123" | jq -r .access_token
+kubectl apply -f k8s/base/01-secrets.yaml --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl apply -f k8s/base/03-authorization-service.yaml --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl apply -f k8s/base/04-patient-data-service.yaml --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl apply -f k8s/base/05-data-transform-service.yaml --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl apply -f k8s/base/07-api-gateway.yaml --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl apply -f k8s/base/09-frontend.yaml --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl apply -f k8s/base/10-ingress.yaml --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl apply -f k8s/base/08-hpa.yaml --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
 ```
 
-Ou, para testes rápidos sem Keycloak, rode o gateway com
-`AUTH_MODE=insecure-dev` e envie os headers `x-username` / `x-role`
-diretamente (já usado pelos scripts de carga).
-
-### Testando os 4 níveis de acesso
-
-Pelo frontend, acesse http://localhost:8082, clique em "Login Keycloak" e
-use um dos usuários do realm (`med.cardoso`, `est.silva`, `pesq.franca`, todos
-com senha `senha123`). O frontend usa Authorization Code + PKCE e envia o JWT
-ao gateway como Bearer token.
+Verificação:
 
 ```bash
-# FULL (médico, paciente vinculado)
-curl -H "x-username: med.cardoso" -H "x-role: medico" \
-  http://localhost:8080/api/patients/P000001/resumo-clinico
-
-# PARTIAL (estagiário)
-curl -H "x-username: est.silva" -H "x-role: estagiario" \
-  http://localhost:8080/api/patients/P000010/resumo-clinico
-
-# AGGREGATED (pesquisador, projeto aprovado e vigente)
-curl -H "x-username: pesq.franca" -H "x-role: pesquisador" \
-  http://localhost:8080/api/coorte/1/estatisticas
-
-# ANONYMIZED (pesquisador, coorte via streaming)
-curl -H "x-username: pesq.franca" -H "x-role: pesquisador" \
-  http://localhost:8080/api/coorte/1/exames
+kubectl get pods -n grupo-6 -o wide --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl get ingress -n grupo-6 --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl get hpa -n grupo-6 --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
 ```
 
-Os comandos acima usam headers de desenvolvimento. Para executá-los no
-`docker compose` padrão, inicie o gateway com `AUTH_MODE=insecure-dev`; caso
-contrário, use o token Bearer real obtido no passo anterior.
+## Autenticação e usuários de teste
 
-## 2. Cluster Kubernetes (minikube, 1 master + 3+ workers)
+Nos testes de carga, o token é obtido pelo Keycloak:
+
+```text
+KEYCLOAK_URL=https://kiriland.unb.br/keycloak
+KEYCLOAK_REALM=grupo06
+CLIENT_ID=admin-cli
+TEST_PASSWORD=PseudoPEP2026!
+```
+
+Usuários usados pelos scripts:
+
+```text
+Médicos:        med.cardoso, med.lima, med.almeida, med.rocha, med.monteiro
+Estagiários:   est.ferreira, est.gomes, est.costa, est.melo, est.dias
+Pesquisadores: pes.mendes, pes.araujo, pes.silveira
+```
+
+Observação: o cliente `admin-cli` gera tokens válidos, mas sem todos os claims da aplicação. Para os testes, o gateway aceita tokens válidos desse cliente e usa `X-Username` para identificar o usuário. Em produção, o correto é usar um client próprio da aplicação com claims completos.
+
+## Validação funcional
+
+Teste rápido da aplicação pública:
 
 ```bash
-minikube start --nodes 4 --cpus 2 --memory 4096 --driver=docker
-minikube addons enable metrics-server   # necessário para o HPA
-./deploy.sh
+BASE_URL=https://kiriland.unb.br/grupo6 \
+KEYCLOAK_URL=https://kiriland.unb.br/keycloak \
+KEYCLOAK_REALM=grupo06 \
+CLIENT_ID=admin-cli \
+TEST_PASSWORD='PseudoPEP2026!' \
+STAGE=10 \
+DURATION=15s \
+RAMP_UP=5s \
+RAMP_DOWN=5s \
+k6 run load-tests/k6/load-test.js
 ```
 
-O script `deploy.sh` builda as imagens dentro do Docker do minikube, cria
-os ConfigMaps de init do banco/Keycloak, e aplica `k8s/base/` + `k8s/monitoring/`.
+Fluxos validados:
 
-Acessando os serviços:
-```bash
-minikube service api-gateway -n hospital --url
-minikube service prometheus -n hospital --url
-minikube service grafana -n hospital --url
-kubectl -n hospital port-forward svc/keycloak 8081:8080
-```
+- Médico vinculado: `ALLOW + FULL`
+- Médico não vinculado: `DENY`
+- Estagiário supervisionado: `ALLOW + PARTIAL`
+- Pesquisador com projeto vigente: `ALLOW + AGGREGATED`
+- Pesquisador sem acesso ao projeto: `DENY`
 
-Verificando distribuição dos pods entre os workers:
-```bash
-kubectl -n hospital get pods -o wide
-```
+## Testes de carga
 
-## 3. Escalabilidade horizontal (item 3.c)
+Script principal:
 
-```bash
-kubectl -n hospital scale deployment api-gateway --replicas=3
-kubectl -n hospital scale deployment authorization-service --replicas=3
-kubectl -n hospital scale deployment patient-data-service --replicas=3
-kubectl -n hospital scale deployment data-transform-service --replicas=3
-kubectl -n hospital get pods -o wide -w
-```
-
-## 4. Autoscaling / HPA (item 3.d)
-
-Os manifests em `k8s/base/08-hpa.yaml` já configuram HPA (min=1, max=10,
-CPU alvo 60%) para os 4 serviços de aplicação. Para observar o autoscaling
-em ação, gere carga (Seção 5) e acompanhe:
-
-```bash
-kubectl -n hospital get hpa -w
-```
-
-## 5. Testes de carga (item 3.b)
-
-Cenários obrigatórios: 10, 50, 100, 500, 1000 usuários simultâneos.
-
-**k6:**
 ```bash
 cd load-tests/k6
-BASE_URL=$(minikube service api-gateway -n hospital --url) \
-KEYCLOAK_URL=http://localhost:8081 \
+BASE_URL=https://kiriland.unb.br/grupo6 \
+KEYCLOAK_URL=https://kiriland.unb.br/keycloak \
+KEYCLOAK_REALM=grupo06 \
+CLIENT_ID=admin-cli \
+TEST_PASSWORD='PseudoPEP2026!' \
+P95_THRESHOLD_MS=7000 \
 ./run-all.sh
 ```
 
-Em outro terminal, deixe o Keycloak acessível para o k6:
+Também é possível rodar um estágio isolado:
+
 ```bash
-kubectl -n hospital port-forward svc/keycloak 8081:8080
+BASE_URL=https://kiriland.unb.br/grupo6 \
+KEYCLOAK_URL=https://kiriland.unb.br/keycloak \
+KEYCLOAK_REALM=grupo06 \
+CLIENT_ID=admin-cli \
+TEST_PASSWORD='PseudoPEP2026!' \
+STAGE=1000 \
+DURATION=60s \
+RAMP_UP=15s \
+RAMP_DOWN=10s \
+P95_THRESHOLD_MS=10000 \
+k6 run --summary-export load-tests/k6/results/final-1000vus.json load-tests/k6/load-test.js
 ```
 
-**Locust (alternativa/complementar):**
+Resultados finais medidos no cluster:
+
+| Cenário | Throughput | Latência média | p95 | Erro |
+|---|---:|---:|---:|---:|
+| Baseline 1 réplica, 500 VUs | 20.39 req/s | 6431.33 ms | 9054.80 ms | 0.00% |
+| Baseline 1 réplica, 1000 VUs | 22.68 req/s | 6058.99 ms | 12738.39 ms | 11.88% |
+| HPA/cache, 500 VUs | 66.32 req/s | 1781.54 ms | 5786.48 ms | 0.00% |
+| HPA/cache, 1000 VUs | 67.94 req/s | 1751.26 ms | 6135.46 ms | 1.05% |
+
+## HPA
+
+Configuração final em `k8s/base/08-hpa.yaml`:
+
+| Serviço | Min réplicas | Max réplicas | CPU alvo |
+|---|---:|---:|---:|
+| API Gateway | 6 | 10 | 40% |
+| Authorization Service | 6 | 10 | 40% |
+| Patient Data Service | 6 | 10 | 40% |
+| Data Transform Service | 3 | 10 | 40% |
+
+Durante o teste de 1000 VUs, gateway, authorization e patient-data chegaram a 10 réplicas.
+
+Comandos úteis:
+
 ```bash
-cd load-tests/locust
-python3 -m pip install -r requirements.txt
-locust -f locustfile.py --host $(minikube service api-gateway -n hospital --url) \
-  --users 100 --spawn-rate 20 --run-time 60s --headless --csv results/locust-100users
+kubectl get hpa -n grupo-6 --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl top pods -n grupo-6 --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl get pods -n grupo-6 -o wide --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
 ```
 
-> Nota de auth para testes de carga: o k6 usa tokens reais do Keycloak por
-> padrão. Para isolar a medição de desempenho dos microsserviços do custo de
-> validação JWT, rode o gateway com `AUTH_MODE=insecure-dev` e execute o k6
-> com `AUTH_MODE=insecure-dev`.
+## Observabilidade
 
-## 6. Observabilidade (item 3.e)
+As métricas são expostas por:
 
-Todos os 4 serviços expõem métricas Prometheus (`/metrics` no gateway,
-`:910x/metrics` nos microsserviços gRPC), descobertas automaticamente
-pelas anotações `prometheus.io/scrape` nos Deployments.
+- API Gateway: `/metrics` na porta 8080.
+- Authorization Service: porta 9100.
+- Patient Data Service: porta 9101.
+- Data Transform Service: porta 9102.
 
-Métricas expostas (mínimo de 5 exigido pela especificação):
-1. `gateway_http_requests_total` — requisições por rota/status
-2. `gateway_http_request_duration_seconds` — latência HTTP no gateway
-3. `authz_requests_total{role,decision}` — decisões ALLOW/DENY por papel
-4. `patientdata_db_queries_total` — número de consultas SQL executadas
-5. `transform_requests_total{method,access_level}` — uso por tipo de transformação
-6. `gateway_authz_denials_total` / `gateway_grpc_errors_total` — erros
-7. Métricas padrão de processo (CPU, memória) via `prom-client`/`prometheus_client`
-8. `kube_deployment_status_replicas` e `kube_horizontalpodautoscaler_*` — réplicas e HPA via kube-state-metrics
-9. `node_cpu_seconds_total` e `node_memory_*` — CPU/memória dos nós via node-exporter
+No Grafana/Rancher Monitoring, filtre os dashboards pelo namespace:
 
-Dashboards Grafana: crie painéis apontando para o datasource "Prometheus"
-(já provisionado). O dashboard `Hospital Microservices - Observability`
-também é provisionado em `k8s/monitoring/01-grafana.yaml`.
+```text
+grupo-6
+```
 
-## Requisitos e testes já validados neste projeto
+Dashboards usados no relatório:
 
-Durante o desenvolvimento, todo o pipeline foi validado localmente com
-PostgreSQL real:
-- Schema + 300 pacientes sintéticos carregados sem erros
-- Os 3 gRPC services rodando e conectados ao banco
-- Gateway roteando corretamente FULL / PARTIAL / ANONYMIZED / AGGREGATED
-- Fluxo de streaming (server-streaming → bidi-streaming) testado com uma
-  coorte real de 108 pacientes
-- Teste de carga real (Locust, 15 usuários) rodou 127 requisições com 0% de falhas
+- `Kubernetes / Compute Resources / Pod`
+- `Kubernetes / Compute Resources / Workload`
+- `Rancher / Workload`
+- `Kubernetes / Networking / Namespace (Pods)`
 
-Falta rodar em cluster K8s real (minikube) e coletar as métricas de
-desempenho para os 5 cenários de carga exigidos — isso depende de acesso a
-Docker/minikube, que não está disponível no ambiente de desenvolvimento
-usado para construir este projeto.
+Métricas relevantes:
+
+- `gateway_http_requests_total`
+- `gateway_http_request_duration_seconds`
+- `gateway_authz_denials_total`
+- `patientdata_requests_total`
+- `patientdata_db_queries_total`
+- `patientdata_request_latency_seconds`
+- `transform_requests_total`
+- métricas Kubernetes de CPU, memória, rede, HPA e réplicas
+
+Para acessar métricas brutas por port-forward:
+
+```bash
+kubectl port-forward svc/api-gateway 8080:8080 -n grupo-6 --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl port-forward svc/authorization-service 9100:9100 -n grupo-6 --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl port-forward svc/patient-data-service 9101:9101 -n grupo-6 --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+kubectl port-forward svc/data-transform-service 9102:9102 -n grupo-6 --kubeconfig=k8s/base/kubeconfig-grupo-6.yaml
+```
+
+URLs locais:
+
+```text
+http://localhost:8080/metrics
+http://localhost:9100/metrics
+http://localhost:9101/metrics
+http://localhost:9102/metrics
+```
+
+## Relatório
+
+O relatório final está em:
+
+```text
+docs/relatorio.md
+```
+
+As imagens usadas no relatório estão em:
+
+```text
+docs/images/
+```
+
+## Desenvolvimento local
+
+O projeto ainda mantém `docker-compose.yaml`, `deploy.sh` e `k8s/monitoring/` como apoio para execução local/minikube. Esse fluxo não foi o ambiente final de avaliação. Para o cluster do professor, use os manifests de `k8s/base/` conforme descrito acima e não suba uma stack própria de Prometheus/Grafana.
+
+## Observações importantes
+
+- O banco real do professor usa IDs textuais e enums em caixa alta; `db/schema.sql` e `db/seed.py` já refletem isso.
+- As imagens configuradas nos manifests usam o padrão `coimbrasdan/hospital-*:g6`.
+- Algumas correções foram aplicadas no cluster via ConfigMap override durante os testes, porque o push de imagem Docker pode depender da autenticação do mantenedor da conta Docker Hub.
+- Antes de uma entrega definitiva operacional, publique novas imagens Docker com o código atual e reaplique os manifests.

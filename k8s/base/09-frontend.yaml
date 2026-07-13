@@ -14,7 +14,7 @@ spec:
       containers:
         - name: frontend
           image: coimbrasdan/hospital-frontend:g6
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 80
           resources:

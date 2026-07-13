@@ -23,14 +23,15 @@ from urllib.request import Request, urlopen
 
 from locust import HttpUser, between, task
 
-MEDICOS = ["med.cardoso", "med.souza", "med.lima", "med.alves", "med.rocha"]
-ESTAGIARIOS = ["est.silva", "est.pereira",
-               "est.costa", "est.santos", "est.oliveira"]
-PESQUISADORES = ["pesq.franca", "pesq.dias", "pesq.moura"]
+MEDICOS = ["med.cardoso", "med.lima", "med.almeida", "med.rocha", "med.monteiro"]
+ESTAGIARIOS = ["est.ferreira", "est.gomes", "est.costa", "est.melo", "est.dias"]
+PESQUISADORES = ["pes.mendes", "pes.araujo", "pes.silveira"]
 PATIENT_IDS = [f"P{i:06d}" for i in range(1, 301)]
-PROJECT_IDS = ["1", "2", "3", "4", "5", "6"]
+PROJECT_IDS = ["PRJ01", "PRJ02", "PRJ03", "PRJ04", "PRJ05", "PRJ06"]
 AUTH_MODE = os.environ.get("AUTH_MODE", "keycloak")
 KEYCLOAK_URL = os.environ.get("KEYCLOAK_URL", "http://localhost:8081")
+KEYCLOAK_REALM = os.environ.get("KEYCLOAK_REALM", "hospital")
+CLIENT_ID = os.environ.get("CLIENT_ID", "hospital-frontend")
 PASSWORD = os.environ.get("TEST_PASSWORD", "senha123")
 
 
@@ -45,14 +46,14 @@ def role_for(username):
 def token_for(username):
     data = urlencode(
         {
-            "client_id": "hospital-frontend",
+            "client_id": CLIENT_ID,
             "grant_type": "password",
             "username": username,
             "password": PASSWORD,
         }
     ).encode()
     request = Request(
-        f"{KEYCLOAK_URL}/realms/hospital/protocol/openid-connect/token",
+        f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/token",
         data=data,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
@@ -73,7 +74,10 @@ class AuthenticatedUser(HttpUser):
             return {"x-username": username, "x-role": role_for(username)}
         if username not in self.tokens:
             self.tokens[username] = token_for(username)
-        return {"Authorization": f"Bearer {self.tokens[username]}"}
+        return {
+            "Authorization": f"Bearer {self.tokens[username]}",
+            "x-username": username,
+        }
 
 
 class MedicoUser(AuthenticatedUser):

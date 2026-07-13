@@ -65,12 +65,15 @@ except ModuleNotFoundError:
 
     fake = SimpleFake()
 
-MEDICOS = ["med.cardoso", "med.souza", "med.lima", "med.alves", "med.rocha"]
-ESTAGIARIOS = ["est.silva", "est.pereira", "est.costa", "est.santos", "est.oliveira"]
-PESQUISADORES = ["pesq.franca", "pesq.dias", "pesq.moura"]
+MEDICOS = ["med.cardoso", "med.lima", "med.almeida", "med.rocha", "med.monteiro"]
+ESTAGIARIOS = ["est.ferreira", "est.gomes", "est.costa", "est.melo", "est.dias"]
+PESQUISADORES = ["pes.mendes", "pes.araujo", "pes.silveira"]
 
-SETORES = ["Cardiologia", "Endocrinologia", "Pediatria", "Ambulatorio Geral", "Emergencia"]
-TIPOS_ATENDIMENTO = ["Ambulatorial", "Emergencia", "Internacao", "Retorno"]
+SETORES = [
+    "CARDIOLOGY", "ENDOCRINOLOGY", "NEPHROLOGY", "PULMONOLOGY",
+    "INTERNAL_MEDICINE", "EMERGENCY", "ICU", "PEDIATRICS", "GERIATRICS",
+]
+TIPOS_ATENDIMENTO = ["AMBULATORIAL", "EMERGENCY", "INPATIENT", "ICU", "FOLLOW_UP", "TELEHEALTH"]
 
 CONDICOES = ["Diabetes", "Hipertensao", "Obesidade", "Asma", "Depressao"]
 OBSERVACOES = {
@@ -112,24 +115,31 @@ def gen_patients(n):
 
 def gen_encounters(patients):
     rows = []
+    encounter_number = 1
     for p in patients:
         for _ in range(random.randint(1, 4)):
             start = fake.date_time_between(start_date="-2y", end_date="now")
             end = start + timedelta(hours=random.randint(1, 48))
             rows.append(
                 {
+                    "encounter_id": f"E{encounter_number:07d}",
                     "patient_id": p["patient_id"],
-                    "data_inicio": start,
-                    "data_fim": end,
-                    "tipo_atendimento": random.choice(TIPOS_ATENDIMENTO),
-                    "setor": random.choice(SETORES),
+                    "start_date": start,
+                    "end_date": end,
+                    "encounter_type": random.choice(TIPOS_ATENDIMENTO),
+                    "department": random.choice(SETORES),
                 }
             )
+            encounter_number += 1
     return rows
 
 
-def gen_clinical_events(patients):
+def gen_clinical_events(patients, encounters):
     rows = []
+    event_number = 1
+    encounters_by_patient = {}
+    for encounter in encounters:
+        encounters_by_patient.setdefault(encounter["patient_id"], []).append(encounter)
     for p in patients:
         # each patient has a 55% chance per condition of having it (gives
         # decently sized, overlapping cohorts for research queries)
@@ -137,42 +147,51 @@ def gen_clinical_events(patients):
         for c in conditions_for_patient:
             rows.append(
                 {
+                    "event_id": f"EV{event_number:07d}",
                     "patient_id": p["patient_id"],
-                    "tipo_evento": "Condicao",
-                    "codigo_evento": c,
-                    "descricao": f"Diagnostico de {c}",
-                    "data_evento": fake.date_time_between(start_date="-2y", end_date="now"),
-                    "valor": None,
-                    "unidade": None,
+                    "encounter_id": random.choice(encounters_by_patient[p["patient_id"]])["encounter_id"],
+                    "event_type": "CONDITION",
+                    "code": c,
+                    "description": f"Diagnostico de {c}",
+                    "event_date": fake.date_time_between(start_date="-2y", end_date="now"),
+                    "value": None,
+                    "unit": None,
                 }
             )
+            event_number += 1
         for _ in range(random.randint(1, 3)):
             code = random.choice(list(OBSERVACOES.keys()))
             unit, lo, hi = OBSERVACOES[code]
             rows.append(
                 {
+                    "event_id": f"EV{event_number:07d}",
                     "patient_id": p["patient_id"],
-                    "tipo_evento": "Observacao",
-                    "codigo_evento": code,
-                    "descricao": "",
-                    "data_evento": fake.date_time_between(start_date="-1y", end_date="now"),
-                    "valor": round(random.uniform(lo, hi), 2),
-                    "unidade": unit,
+                    "encounter_id": random.choice(encounters_by_patient[p["patient_id"]])["encounter_id"],
+                    "event_type": "OBSERVATION",
+                    "code": code,
+                    "description": f"Resultado de {code}",
+                    "event_date": fake.date_time_between(start_date="-1y", end_date="now"),
+                    "value": str(round(random.uniform(lo, hi), 2)),
+                    "unit": unit,
                 }
             )
+            event_number += 1
         if conditions_for_patient:
             for _ in range(random.randint(1, 2)):
                 rows.append(
                     {
+                        "event_id": f"EV{event_number:07d}",
                         "patient_id": p["patient_id"],
-                        "tipo_evento": "Medicacao",
-                        "codigo_evento": random.choice(MEDICAMENTOS),
-                        "descricao": "Uso continuo",
-                        "data_evento": fake.date_time_between(start_date="-1y", end_date="now"),
-                        "valor": None,
-                        "unidade": None,
+                        "encounter_id": random.choice(encounters_by_patient[p["patient_id"]])["encounter_id"],
+                        "event_type": "MEDICATION",
+                        "code": random.choice(MEDICAMENTOS),
+                        "description": "Uso continuo",
+                        "event_date": fake.date_time_between(start_date="-1y", end_date="now"),
+                        "value": None,
+                        "unit": None,
                     }
                 )
+                event_number += 1
     return rows
 
 
@@ -185,15 +204,16 @@ def gen_assignments(patients):
             medico = random.choice(MEDICOS)
         rows.append(
             {
-                "username_cuidador": medico,
+                "assignment_id": f"A-MED-{p['patient_id']}",
+                "username": medico,
                 "patient_id": p["patient_id"],
-                "tipo_vinculo": "medico",
-                "username_supervisor": None,
-                "status": "ativo",
+                "assignment_type": "ATTENDING",
+                "supervisor_username": None,
+                "active": True,
             }
         )
         if p["patient_id"] == "P000010":
-            estagiario = "est.silva"
+            estagiario = "est.ferreira"
         elif random.random() < 0.6:
             estagiario = random.choice(ESTAGIARIOS)
         else:
@@ -201,11 +221,12 @@ def gen_assignments(patients):
         if estagiario:
             rows.append(
                 {
-                    "username_cuidador": estagiario,
+                    "assignment_id": f"A-EST-{p['patient_id']}",
+                    "username": estagiario,
                     "patient_id": p["patient_id"],
-                    "tipo_vinculo": "estagiario",
-                    "username_supervisor": medico,
-                    "status": "ativo",
+                    "assignment_type": "TRAINEE",
+                    "supervisor_username": medico,
+                    "active": True,
                 }
             )
     return rows
@@ -214,36 +235,40 @@ def gen_assignments(patients):
 def gen_projects():
     rows = [
         {
-            "titulo": "Estudo sobre Depressao - pesq.franca",
-            "username_pesquisador": "pesq.franca",
-            "codigo_condicao": "Depressao",
-            "status": "Aprovado",
-            "data_validade": date.today() + timedelta(days=255),
+            "project_id": "PRJ01",
+            "title": "Estudo sobre Depressao - pes.mendes",
+            "researcher_username": "pes.mendes",
+            "target_condition_code": "Depressao",
+            "status": "APPROVED",
+            "valid_until": date.today() + timedelta(days=255),
         },
         {
-            "titulo": "Estudo sobre Hipertensao - pesq.franca",
-            "username_pesquisador": "pesq.franca",
-            "codigo_condicao": "Hipertensao",
-            "status": "Aprovado",
-            "data_validade": date.today() + timedelta(days=160),
+            "project_id": "PRJ02",
+            "title": "Estudo sobre Hipertensao - pes.mendes",
+            "researcher_username": "pes.mendes",
+            "target_condition_code": "Hipertensao",
+            "status": "APPROVED",
+            "valid_until": date.today() + timedelta(days=160),
         },
         {
-            "titulo": "Estudo sobre Hipertensao - pesq.dias",
-            "username_pesquisador": "pesq.dias",
-            "codigo_condicao": "Hipertensao",
-            "status": "Suspenso",
-            "data_validade": date.today() + timedelta(days=345),
+            "project_id": "PRJ03",
+            "title": "Estudo sobre Hipertensao - pes.araujo",
+            "researcher_username": "pes.araujo",
+            "target_condition_code": "Hipertensao",
+            "status": "SUSPENDED",
+            "valid_until": date.today() + timedelta(days=345),
         },
     ]
-    for pesq in PESQUISADORES:
+    for index, pesq in enumerate(PESQUISADORES, start=4):
         for _ in range(1):
             rows.append(
                 {
-                    "titulo": f"Estudo sobre {random.choice(CONDICOES)} - {pesq}",
-                    "username_pesquisador": pesq,
-                    "codigo_condicao": random.choice(CONDICOES),
-                    "status": random.choices(["Aprovado", "Expirado", "Suspenso"], weights=[80, 10, 10])[0],
-                    "data_validade": date.today() + timedelta(days=random.randint(-30, 365)),
+                    "project_id": f"PRJ{index:02d}",
+                    "title": f"Estudo clinico - {pesq}",
+                    "researcher_username": pesq,
+                    "target_condition_code": random.choice(CONDICOES),
+                    "status": random.choices(["APPROVED", "EXPIRED", "SUSPENDED"], weights=[80, 10, 10])[0],
+                    "valid_until": date.today() + timedelta(days=random.randint(-30, 365)),
                 }
             )
     return rows
@@ -265,7 +290,7 @@ def to_sql(table, rows, cols):
             else:
                 vals.append(esc(v))
         values.append("(" + ", ".join(vals) + ")")
-    lines.append(",\n".join(values) + ";")
+    lines.append(",\n".join(values) + " ON CONFLICT DO NOTHING;")
     return "\n".join(lines) + "\n\n"
 
 
@@ -282,16 +307,16 @@ def main():
 
     patients = gen_patients(args.patients)
     encounters = gen_encounters(patients)
-    events = gen_clinical_events(patients)
+    events = gen_clinical_events(patients, encounters)
     assignments = gen_assignments(patients)
     projects = gen_projects()
 
     sql = "-- Auto-generated seed data. Do not edit by hand; regenerate with seed.py\n\n"
     sql += to_sql("patients", patients, ["patient_id", "full_name", "birth_date", "gender", "city", "state", "cpf", "cns"])
-    sql += to_sql("encounters", encounters, ["patient_id", "data_inicio", "data_fim", "tipo_atendimento", "setor"])
-    sql += to_sql("clinical_events", events, ["patient_id", "tipo_evento", "codigo_evento", "descricao", "data_evento", "valor", "unidade"])
-    sql += to_sql("user_patient_assignments", assignments, ["username_cuidador", "patient_id", "tipo_vinculo", "username_supervisor", "status"])
-    sql += to_sql("projects", projects, ["titulo", "username_pesquisador", "codigo_condicao", "status", "data_validade"])
+    sql += to_sql("encounters", encounters, ["encounter_id", "patient_id", "start_date", "end_date", "encounter_type", "department"])
+    sql += to_sql("clinical_events", events, ["event_id", "patient_id", "encounter_id", "event_type", "code", "description", "value", "unit", "event_date"])
+    sql += to_sql("user_patient_assignments", assignments, ["assignment_id", "username", "patient_id", "assignment_type", "supervisor_username", "active"])
+    sql += to_sql("projects", projects, ["project_id", "title", "researcher_username", "target_condition_code", "status", "valid_until"])
 
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(sql)

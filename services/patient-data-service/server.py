@@ -7,7 +7,9 @@ Gateway already called AuthorizationService.CheckAccess.
 """
 import logging
 import os
+import re
 import time
+from threading import Lock
 from concurrent import futures
 from contextlib import contextmanager
 
@@ -29,6 +31,13 @@ DB_DSN = os.environ.get(
 DB_POOL_MIN = int(os.environ.get("DB_POOL_MIN", "1"))
 DB_POOL_MAX = int(os.environ.get("DB_POOL_MAX", "30"))
 DB_POOL = None
+CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "60"))
+CACHE_LOCK = Lock()
+CACHE = {
+    "caregiver_patients": {},
+    "patient_summary": {},
+    "aggregated_stats": {},
+}
 
 REQUEST_COUNT = Counter(
     "patientdata_requests_total", "Total requests handled", ["method"]
@@ -44,6 +53,29 @@ def _get_pool():
     if DB_POOL is None:
         DB_POOL = pool.ThreadedConnectionPool(DB_POOL_MIN, DB_POOL_MAX, DB_DSN)
     return DB_POOL
+
+
+def _cache_get(namespace, key):
+    if CACHE_TTL_SECONDS <= 0:
+        return None
+    now = time.time()
+    with CACHE_LOCK:
+        item = CACHE[namespace].get(key)
+        if not item:
+            return None
+        expires_at, value = item
+        if expires_at <= now:
+            CACHE[namespace].pop(key, None)
+            return None
+        return value
+
+
+def _cache_set(namespace, key, value):
+    if CACHE_TTL_SECONDS <= 0:
+        return value
+    with CACHE_LOCK:
+        CACHE[namespace][key] = (time.time() + CACHE_TTL_SECONDS, value)
+    return value
 
 
 @contextmanager
@@ -62,7 +94,7 @@ def _row_to_encounter(r):
     # Proto field names (data_inicio, tipo_atendimento, setor, ...) are kept
     # as-is -- they are the internal gRPC contract, not DB column names.
     return hospital_pb2.Encounter(
-        encounter_id=r["encounter_id"],
+        encounter_id=_numeric_id(r["encounter_id"]),
         data_inicio=str(r["start_date"]),
         data_fim=str(r["end_date"]) if r["end_date"] else "",
         tipo_atendimento=r["encounter_type"] or "",
@@ -72,7 +104,7 @@ def _row_to_encounter(r):
 
 def _row_to_event(r):
     return hospital_pb2.ClinicalEvent(
-        evento_id=r["event_id"],
+        evento_id=_numeric_id(r["event_id"]),
         patient_id=r["patient_id"],
         tipo_evento=r["event_type"],
         codigo_evento=r["code"],
@@ -81,6 +113,12 @@ def _row_to_event(r):
         valor=float(r["value"]) if r["value"] is not None else 0.0,
         unidade=r["unit"] or "",
     )
+
+
+def _numeric_id(value):
+    """Adapt textual IDs from the shared DB to the legacy int32 gRPC fields."""
+    digits = re.sub(r"\D", "", str(value))
+    return int(digits[-9:]) if digits else 0
 
 
 def _build_patient(cur, patient_id) -> hospital_pb2.RawPatientDataResponse:
@@ -128,6 +166,11 @@ class PatientDataServicer(hospital_pb2_grpc.PatientDataServiceServicer):
         with REQUEST_LATENCY.labels("GetPatientsByCaregiver").time():
             REQUEST_COUNT.labels("GetPatientsByCaregiver").inc()
             tipo = "ATTENDING" if request.role.lower() == "medico" else "TRAINEE"
+            cache_key = (request.username, tipo)
+            cached = _cache_get("caregiver_patients", cache_key)
+            if cached is not None:
+                return hospital_pb2.PatientListResponse(patient_ids=cached)
+
             with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
                 DB_QUERY_COUNT.inc()
                 cur.execute(
@@ -138,31 +181,44 @@ class PatientDataServicer(hospital_pb2_grpc.PatientDataServiceServicer):
                     (request.username, tipo),
                 )
                 ids = [r["patient_id"] for r in cur.fetchall()]
+            _cache_set("caregiver_patients", cache_key, ids)
             return hospital_pb2.PatientListResponse(patient_ids=ids)
 
     def GetPatientSummary(self, request, context):
         with REQUEST_LATENCY.labels("GetPatientSummary").time():
             REQUEST_COUNT.labels("GetPatientSummary").inc()
+            cached = _cache_get("patient_summary", request.patient_id)
+            if cached is not None:
+                return cached
+
             with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
                 patient = _build_patient(cur, request.patient_id)
             if patient is None:
                 context.abort(grpc.StatusCode.NOT_FOUND, "patient not found")
-            return patient
+            return _cache_set("patient_summary", request.patient_id, patient)
 
     def GetPatientHistory(self, request, context):
         # Same underlying data as summary; frontend/gateway decides how to
         # render it (summary = latest snapshot, history = full timeline).
         with REQUEST_LATENCY.labels("GetPatientHistory").time():
             REQUEST_COUNT.labels("GetPatientHistory").inc()
+            cached = _cache_get("patient_summary", request.patient_id)
+            if cached is not None:
+                return cached
+
             with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
                 patient = _build_patient(cur, request.patient_id)
             if patient is None:
                 context.abort(grpc.StatusCode.NOT_FOUND, "patient not found")
-            return patient
+            return _cache_set("patient_summary", request.patient_id, patient)
 
     def GetAggregatedStats(self, request, context):
         with REQUEST_LATENCY.labels("GetAggregatedStats").time():
             REQUEST_COUNT.labels("GetAggregatedStats").inc()
+            cached = _cache_get("aggregated_stats", request.project_id)
+            if cached is not None:
+                return cached
+
             with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
                 patient_ids = self._cohort_patient_ids(cur, request)
 
@@ -200,21 +256,23 @@ class PatientDataServicer(hospital_pb2_grpc.PatientDataServiceServicer):
                 DB_QUERY_COUNT.inc()
                 cur.execute(
                     """
-                    SELECT code, AVG(value) AS media FROM clinical_events
-                    WHERE patient_id = ANY(%s) AND event_type = 'OBSERVATION' AND value IS NOT NULL
+                    SELECT code, AVG(value::numeric) AS media FROM clinical_events
+                    WHERE patient_id = ANY(%s) AND event_type = 'OBSERVATION'
+                      AND value ~ '^[+-]?[0-9]+([.][0-9]+)?$'
                     GROUP BY code
                     """,
                     (patient_ids,),
                 )
                 avg_values = {r["code"]: float(r["media"]) for r in cur.fetchall()}
 
-            return hospital_pb2.AggregatedStatsResponse(
+            response = hospital_pb2.AggregatedStatsResponse(
                 total_patients=len(patient_ids),
                 gender_distribution=gender_dist,
                 age_distribution=age_dist,
                 department_distribution=dept_dist,
                 avg_values=avg_values,
             )
+            return _cache_set("aggregated_stats", request.project_id, response)
 
     def StreamCohortData(self, request, context):
         """Server-streaming RPC: yields one patient at a time instead of

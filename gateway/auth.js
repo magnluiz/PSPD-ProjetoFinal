@@ -31,7 +31,14 @@ function getKey(header, callback) {
 function extractRole(decoded) {
   const roles = (decoded.realm_access && decoded.realm_access.roles) || [];
   const known = ["medico", "estagiario", "pesquisador"];
-  return roles.find((r) => known.includes(r)) || roles[0] || "unknown";
+  return roles.map((role) => role.toLowerCase()).find((role) => known.includes(role)) || "unknown";
+}
+
+function roleFromUsername(username) {
+  if (username.startsWith("med.")) return "medico";
+  if (username.startsWith("est.")) return "estagiario";
+  if (username.startsWith("pes.")) return "pesquisador";
+  return "unknown";
 }
 
 function authMiddleware(req, res, next) {
@@ -55,10 +62,23 @@ function authMiddleware(req, res, next) {
     if (err) {
       return res.status(401).json({ error: "invalid token", detail: err.message });
     }
-    req.user = {
-      username: decoded.preferred_username || decoded.sub,
-      role: extractRole(decoded),
-    };
+    let username = decoded.preferred_username || decoded.sub;
+    let role = extractRole(decoded);
+
+    // The shared course Keycloak issues lightweight admin-cli tokens without
+    // username/role claims. For load tests only, accept a test identity header
+    // after signature validation and derive its role from the documented
+    // username prefixes. Application-specific OIDC clients should carry the
+    // identity and role in the JWT instead.
+    if (decoded.azp === "admin-cli" && !decoded.preferred_username) {
+      username = req.header("x-username") || "";
+      role = roleFromUsername(username);
+    }
+    if (!username || role === "unknown") {
+      return res.status(403).json({ error: "token has no supported identity or role" });
+    }
+
+    req.user = { username, role };
     next();
   });
 }

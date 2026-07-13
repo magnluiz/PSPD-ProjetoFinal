@@ -17,7 +17,10 @@
 set -u
 BASE_URL="${BASE_URL:-http://localhost:8080}"
 KEYCLOAK_URL="${KEYCLOAK_URL:-http://localhost:8081}"
+KEYCLOAK_REALM="${KEYCLOAK_REALM:-hospital}"
+CLIENT_ID="${CLIENT_ID:-hospital-frontend}"
 AUTH_MODE="${AUTH_MODE:-keycloak}"
+TEST_PASSWORD="${TEST_PASSWORD:-senha123}"
 DURATION="${DURATION:-60s}"
 mkdir -p results
 
@@ -30,7 +33,10 @@ for STAGE in 10 50 100 500 1000; do
   k6 run \
     -e BASE_URL="$BASE_URL" \
     -e KEYCLOAK_URL="$KEYCLOAK_URL" \
+    -e KEYCLOAK_REALM="$KEYCLOAK_REALM" \
+    -e CLIENT_ID="$CLIENT_ID" \
     -e AUTH_MODE="$AUTH_MODE" \
+    -e TEST_PASSWORD="$TEST_PASSWORD" \
     -e STAGE="$STAGE" \
     -e DURATION="$DURATION" \
     --summary-export="results/k6-summary-${STAGE}vus.json" \
